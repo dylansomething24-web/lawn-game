@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#2f6b25">
+<title>Cut Above</title>
+<link rel="manifest" href="manifest.json">
+<style>
+:root{
+    --bg:#24521d;--panel:#fffaf0;--ink:#1d1d1d;--muted:#6a6658;--green:#3f8a36;--light:#8fd067;
+    --red:#d94a3a;--amber:#f0a830;--btn:#fffdf7;
+    --font:'Trebuchet MS','Segoe UI',system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--ink);font-family:var(--font);-webkit-user-select:none;user-select:none;overscroll-behavior:none;}
+button{font:inherit;color:inherit;touch-action:manipulation;cursor:pointer;}
+[hidden]{display:none!important;}
+#app{display:flex;flex-direction:column;height:100%;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);}
+
+#hud{flex:none;display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--panel);border-bottom:3px solid var(--ink);}
+#h-name{font-weight:700;font-size:1rem;white-space:nowrap;}
+#h-barwrap{flex:1;height:14px;border:2px solid var(--ink);border-radius:8px;background:#e7e1cf;overflow:hidden;min-width:60px;}
+#h-bar{height:100%;width:0;background:repeating-linear-gradient(90deg,var(--light) 0 10px,#6fb04c 10px 20px);transition:width .2s;}
+#h-cov{font-weight:700;min-width:52px;text-align:right;font-variant-numeric:tabular-nums;}
+#h-time{font-weight:700;min-width:40px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums;}
+
+#stage{flex:1;position:relative;min-height:0;}
+#game{position:absolute;inset:0;}
+#game canvas{touch-action:none;display:block;}
+
+#hint{position:absolute;left:12px;right:12px;top:10px;display:flex;gap:10px;align-items:flex-start;background:var(--panel);border:3px solid var(--ink);border-radius:14px;padding:10px 12px;box-shadow:0 4px 0 rgba(0,0,0,.25);transform:translateY(-140%);opacity:0;transition:transform .3s,opacity .3s;z-index:5;pointer-events:none;}
+#hint.show{transform:none;opacity:.94;}
+#hint .who{flex:none;width:34px;height:34px;border-radius:50%;background:#c9a77a;border:3px solid var(--ink);display:grid;place-items:center;font-weight:700;}
+#hint b{display:block;font-size:.8rem;color:var(--muted);}
+#hint-text{font-size:.95rem;line-height:1.3;}
+
+#tools{flex:none;display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:8px 10px 6px;background:var(--panel);border-top:3px solid var(--ink);}
+#tools .row2{grid-column:1/-1;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;}
+.tbtn{min-height:48px;border:3px solid var(--ink);border-radius:12px;background:var(--btn);font-weight:700;font-size:1rem;box-shadow:0 3px 0 var(--ink);}
+.tbtn:active{transform:translateY(2px);box-shadow:0 1px 0 var(--ink);}
+.tbtn.on{background:var(--light);}
+#tool-trimmer.on{background:#ffd27a;}
+.sbtn{min-height:40px;border:2px solid var(--ink);border-radius:10px;background:var(--btn);font-weight:700;font-size:.85rem;}
+.sbtn:active{background:#eee6d2;}
+
+#done{position:absolute;inset:0;display:grid;place-items:center;background:rgba(20,40,15,.35);z-index:6;padding:16px;}
+#done .card{width:100%;max-width:340px;background:var(--panel);border:3px solid var(--ink);border-radius:18px;padding:18px;text-align:center;box-shadow:0 6px 0 rgba(0,0,0,.3);}
+#done h2{font-size:1.6rem;margin-bottom:2px;}
+#done .sub{color:var(--muted);margin-bottom:14px;}
+#done .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:16px;}
+#done .stats div{border:2px solid var(--ink);border-radius:10px;padding:8px 4px;background:#fff;}
+#done .stats b{display:block;font-size:1.2rem;font-variant-numeric:tabular-nums;}
+#done .stats span{font-size:.75rem;color:var(--muted);}
+#done .walt{font-style:italic;margin-bottom:14px;}
+
+#debug{position:absolute;left:4px;bottom:4px;z-index:7;background:rgba(0,0,0,.6);color:#cfe;font:10px monospace;padding:4px;border-radius:6px;max-width:200px;white-space:pre-wrap;pointer-events:none;}
+#debug button{font:10px monospace;margin:3px 3px 0 0;padding:2px 5px;color:#111;background:#dde;border:1px solid #888;pointer-events:auto;}
+</style>
+</head>
+<body>
+<div id="app">
+    <div id="hud">
+        <div id="h-name">Walt's yard</div>
+        <div id="h-barwrap"><div id="h-bar"></div></div>
+        <div id="h-cov">0.0%</div>
+        <div id="h-time">0:00</div>
+    </div>
+    <div id="stage">
+        <div id="game"></div>
+        <div id="hint"><div class="who">W</div><div><b>Walt</b><div id="hint-text"></div></div></div>
+        <div id="done" hidden>
+            <div class="card">
+                <h2>Yard done!</h2>
+                <div class="sub">Walt's yard</div>
+                <div class="stats">
+                    <div><b id="done-time">0:00</b><span>time</span></div>
+                    <div><b id="done-cov">0%</b><span>cut</span></div>
+                    <div><b id="done-passes">0</b><span>passes</span></div>
+                </div>
+                <div class="walt">"Now that's a yard. Look at those stripes." — Walt</div>
+                <button class="tbtn" id="done-again" style="width:100%">Mow it again</button>
+            </div>
+        </div>
+        <div id="debug" hidden><div id="dbg-stats">-</div><div id="dbg-pacing"></div><button id="dbg-mowall">mow all but edges</button><button id="dbg-clear">clear pacing</button></div>
+    </div>
+    <div id="tools">
+        <button class="tbtn on" id="tool-mower">Mower</button>
+        <button class="tbtn" id="tool-trimmer">Trimmer</button>
+        <div class="row2">
+            <button class="sbtn" id="btn-undo">Undo</button>
+            <button class="sbtn" id="btn-stop">Stop</button>
+            <button class="sbtn" id="btn-restart">Restart</button>
+            <button class="sbtn" id="btn-sound">Sound on</button>
+        </div>
+    </div>
+</div>
+<script src="phaser.min.js"></script>
+<script src="js/config.js"></script>
+<script src="js/yard.js"></script>
+<script src="js/sound.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/scene.js"></script>
+<script>
+UI.init();
+const game = new Phaser.Game({
+    type: Phaser.AUTO,
+    parent: 'game',
+    width: 400, height: 640,
+    backgroundColor: '#24521d',
+    scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+    scene: [YardScene],
+    render: { antialias: true },
+});
+window.game = game;
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js');
+</script>
+</body>
+</html>
