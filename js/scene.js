@@ -28,10 +28,154 @@ class YardScene extends Phaser.Scene {
 
         this.units = { mower: this.makeUnit('mower'), trimmer: this.makeUnit('trimmer') };
         this.active = 'mower';
+        this.mstate = 'idle';          // mower: idle | drive | uturn | around | end | blocked
+        this.units.mower.dir = null;
 
-        this.input.on('pointerdown', p => this.onTap(p.worldX, p.worldY));
+        const cam = this.cameras.main;
+        cam.setBounds(0, 0, 400, 640);
+        this.zoomed = UI.zoomed;
+        cam.setZoom(this.zoomed ? CFG.zoom : 1);
+        cam.startFollow(this.units.mower.c, true, 0.12, 0.12);
+
+        this.down = null;
+        this.input.on('pointerdown', p => { this.down = { x: p.x, y: p.y, wx: p.worldX, wy: p.worldY }; });
+        this.input.on('pointerup', p => {
+            const d = this.down; this.down = null;
+            if (!d) return;
+            const dx = p.x - d.x, dy = p.y - d.y;
+            if (Math.hypot(dx, dy) >= CFG.swipeMin) this.onSwipe(dx, dy);
+            else this.onTap(d.wx, d.wy);
+        });
         UI.sceneReady(this);
-        UI.hint('start', "Tap where you want the mower to go. It drives straight to each spot. Tap the mower to stop it.");
+        this.refreshActions();
+        UI.hint('start', "Swipe on the yard to send the mower straight. It mows until it reaches the edge. Tap the yard to stop it.");
+    }
+
+    toggleZoom() {
+        this.zoomed = !this.zoomed; UI.zoomed = this.zoomed;
+        this.cameras.main.zoomTo(this.zoomed ? CFG.zoom : 1, 250);
+        return this.zoomed;
+    }
+
+    startClock() {
+        if (this.startTime === null) { this.startTime = this.time.now; Pacing.mark('first move'); }
+    }
+
+    // ---------- lane mowing ----------
+    onSwipe(dx, dy) {
+        if (this.finished || this.active !== 'mower') return;
+        const d = Math.abs(dx) > Math.abs(dy) ? { x: Math.sign(dx), y: 0 } : { x: 0, y: Math.sign(dy) };
+        this.startLane(d);
+    }
+
+    startLane(d) {
+        const u = this.units.mower;
+        if (this.finished) return;
+        Sound.init(); Sound.pullStart(); this.startClock();
+        u.dir = d;
+        const r = u.cfg.collideR, end = this.reach({ x: u.x, y: u.y }, { x: u.x + d.x * 2000, y: u.y + d.y * 2000 }, r);
+        u.queue.length = 0;
+        this.mstate = 'drive';
+        this.laneStart = { x: u.x, y: u.y };
+        if (Math.hypot(end.x - u.x, end.y - u.y) < 4) { this.mowerStopped(); return; }
+        u.queue.push(end);
+        this.refreshActions();
+    }
+
+    // The mower's route ran out: decide what happens next.
+    mowerStopped() {
+        const u = this.units.mower;
+        if (this.mstate === 'uturn') { this.startLane(this.pendingDir); return; }
+        if (this.mstate === 'around') { this.startLane(u.dir); return; }
+        if (this.mstate === 'drive' && this.laneStart && Math.hypot(u.x - this.laneStart.x, u.y - this.laneStart.y) > 20) {
+            this.passes++;
+            if (this.passes === 3) UI.hint('passes', "Nice. Keep turning back and forth and the stripes line up on their own.");
+        }
+        const d = u.dir;
+        if (!d) { this.mstate = 'idle'; this.refreshActions(); return; }
+        const px = u.x + d.x * 3, py = u.y + d.y * 3, r = u.cfg.collideR, B = WALT_YARD.bounds;
+        const edge = px < B.x0 + r || px > B.x1 - r || py < B.y0 + r || py > B.y1 - r;
+        if (!edge && this.yard.collides(px, py, r)) {
+            this.mstate = 'blocked';
+            UI.hint('blocked', "Something's in the way. Go around it, or turn back here and start the next lane.");
+        } else {
+            this.mstate = 'end';
+            UI.hint('end', "End of the lane. Pick which side the next lane goes. The mower lines itself up. Or swipe a new direction.");
+        }
+        this.refreshActions();
+    }
+
+    sides() {
+        const d = this.units.mower.dir;
+        return [{ x: -d.y, y: d.x }, { x: d.y, y: -d.x }].sort((a, b) => (a.x - b.x) || (a.y - b.y));
+    }
+
+    arrow(v) { return v.x < 0 ? '←' : v.x > 0 ? '→' : v.y < 0 ? '↑' : '↓'; }
+
+    laneShift(s) {
+        const u = this.units.mower, sp = u.cfg.lane;
+        const t = this.reach({ x: u.x, y: u.y }, { x: u.x + s.x * sp, y: u.y + s.y * sp }, u.cfg.collideR);
+        return Math.hypot(t.x - u.x, t.y - u.y) >= sp * 0.45 ? t : null;
+    }
+
+    uTurn(s) {
+        const u = this.units.mower, t = this.laneShift(s);
+        if (!t) return;
+        u.queue.length = 0; u.queue.push(t);
+        this.pendingDir = { x: -u.dir.x, y: -u.dir.y };
+        this.mstate = 'uturn';
+        this.refreshActions();
+    }
+
+    // Detour: step sideways, drive past the obstacle, step back onto the lane.
+    aroundPath(s) {
+        const u = this.units.mower, d = u.dir, r = u.cfg.collideR, here = { x: u.x, y: u.y };
+        for (let back = 0; back <= 48; back += 6) {                       // back up a little if there's no room to step aside
+            const from = { x: u.x - d.x * back, y: u.y - d.y * back };
+            if (back && Math.hypot(this.reach(here, from, r).x - from.x, this.reach(here, from, r).y - from.y) > 0.5) break;
+            for (let off = 6; off <= 100; off += 3) {
+                const p1 = { x: from.x + s.x * off, y: from.y + s.y * off };
+                const a = this.reach(from, p1, r);
+                if (Math.hypot(a.x - p1.x, a.y - p1.y) > 0.5) break;      // can't step that far sideways from here
+                for (let t = 6; t <= 180 + back; t += 3) {
+                    const f = { x: p1.x + d.x * t, y: p1.y + d.y * t };
+                    if (this.yard.collides(f.x, f.y, r)) break;           // this offset is blocked too; go wider
+                    const q = { x: from.x + d.x * t, y: from.y + d.y * t };
+                    if (t <= back + 3 || this.yard.collides(q.x, q.y, r)) continue;
+                    const ret = this.reach(f, q, r);
+                    if (Math.hypot(ret.x - q.x, ret.y - q.y) < 0.5) return back ? [from, p1, f, q] : [p1, f, q];
+                }
+            }
+        }
+        return null;
+    }
+
+    goAround(s) {
+        const u = this.units.mower, path = this.aroundPath(s);
+        if (!path) return;
+        u.queue.length = 0; u.queue.push(...path);
+        this.mstate = 'around';
+        this.refreshActions();
+    }
+
+    goDir(d) { this.startLane(d); }
+
+    refreshActions() {
+        const A = [];
+        if (this.finished) { UI.setActions(A); return; }
+        if (this.active === 'trimmer') {
+            A.push({ label: 'Undo', fn: () => this.undo() }, { label: 'Stop', fn: () => this.stop() });
+        } else if (this.mstate === 'drive' || this.mstate === 'uturn' || this.mstate === 'around') {
+            A.push({ label: 'Stop', fn: () => this.stop(), wide: true });
+        } else if (this.mstate === 'end' || this.mstate === 'blocked') {
+            const S = this.sides();
+            if (this.mstate === 'blocked') for (const s of S) A.push({ label: 'Around ' + this.arrow(s), fn: () => this.goAround(s), off: !this.aroundPath(s) });
+            for (const s of S) A.push({ label: (this.mstate === 'blocked' ? 'Turn ' : 'Next lane ') + this.arrow(s), fn: () => this.uTurn(s), off: !this.laneShift(s) });
+        } else {
+            for (const [lab, d] of [['Go ←', { x: -1, y: 0 }], ['Go ↑', { x: 0, y: -1 }], ['Go ↓', { x: 0, y: 1 }], ['Go →', { x: 1, y: 0 }]])
+                A.push({ label: lab, fn: () => this.goDir(d) });
+        }
+        UI.setActions(A);
     }
 
     // ---------- drawing the world ----------
@@ -136,8 +280,12 @@ class YardScene extends Phaser.Scene {
         if (this.finished) return;
         Sound.init();
         const u = this.units[this.active];
-        if (this.startTime === null) { this.startTime = this.time.now; Pacing.mark('first tap'); }
-        if (u.kind === 'mower') Sound.pullStart();
+        if (u.kind === 'mower') {
+            if (u.queue.length) this.stop();
+            else UI.hint('swipe', "Swipe on the yard to send the mower in a direction, or use the Go buttons.");
+            return;
+        }
+        this.startClock();
         const dx = x - u.x, dy = y - u.y;
         if (dx * dx + dy * dy < CFG.stopTapRadius * CFG.stopTapRadius) { this.stop(); return; }
         const want = this.yard.clamp(x, y, u.cfg.collideR);
@@ -169,14 +317,21 @@ class YardScene extends Phaser.Scene {
         return { x: to.x, y: to.y };
     }
 
-    stop() { const u = this.units[this.active]; u.queue.length = 0; }
+    stop() {
+        const u = this.units[this.active]; u.queue.length = 0;
+        if (u.kind === 'mower') { this.mstate = 'idle'; this.refreshActions(); }
+    }
     undo() { const u = this.units[this.active]; u.queue.pop(); }
 
     setTool(kind) {
         if (kind === this.active || this.finished) return;
         this.units[this.active].queue.length = 0;
+        if (this.active === 'mower') this.mstate = 'idle';
         this.active = kind;
+        this.cameras.main.startFollow(this.units[kind].c, true, 0.12, 0.12);
+        if (kind === 'trimmer') UI.hint('trimtap', "Tap where you want to walk. The trimmer gets in close to everything.");
         UI.toolChanged(kind);
+        this.refreshActions();
     }
 
     // ---------- loop ----------
@@ -186,6 +341,8 @@ class YardScene extends Phaser.Scene {
 
         let anyMoving = false;
         for (const k in this.units) { const u = this.units[k]; this.stepUnit(u, dt); if (k === this.active) anyMoving = u.moving; }
+        const m = this.units.mower;
+        if (!this.finished && !m.queue.length && (this.mstate === 'drive' || this.mstate === 'uturn' || this.mstate === 'around')) this.mowerStopped();
         Sound.engine(this.finished ? 'off' : this.active, anyMoving);
 
         this.drawRoute();
@@ -207,6 +364,15 @@ class YardScene extends Phaser.Scene {
         if (dist < 0.5) { u.queue.shift(); this.arrived(u); return; }
         const want = Math.atan2(dy, dx);
         let diff = Phaser.Math.Angle.Wrap(want - u.a);
+        if (Math.abs(diff) > 2.6 && dist < 50) {   // short move straight behind: back up instead of spinning around
+            const step = Math.min(dist, u.cfg.speed * 0.6 * dt);
+            const nx = u.x + Math.cos(want) * step, ny = u.y + Math.sin(want) * step;
+            if (this.yard.collides(nx, ny, u.cfg.collideR)) { u.queue.length = 0; return; }
+            u.x = nx; u.y = ny; u.c.setPosition(nx, ny); u.moving = true;
+            this.cutAt(u, true);
+            if (step >= dist - 0.01) { u.queue.shift(); this.arrived(u); }
+            return;
+        }
         const maxTurn = u.cfg.turnRate * dt;
         if (Math.abs(diff) > maxTurn) u.a += Math.sign(diff) * maxTurn; else u.a = want;
         u.c.rotation = u.a;
@@ -226,17 +392,13 @@ class YardScene extends Phaser.Scene {
         if (step >= dist - 0.01) { u.queue.shift(); this.arrived(u); }
     }
 
-    arrived(u) {
-        if (u.kind !== 'mower') return;
-        this.passes++;
-        if (this.passes === 2) UI.hint('passes', "Lay each pass right beside the last one. A little overlap, no gaps.");
-    }
+    arrived(u) { }
 
-    cutAt(u) {
+    cutAt(u, reversing) {
         let ns;
         if (u.kind === 'trimmer') ns = STATE.TRIM;
         else {
-            const hx = Math.cos(u.a), hy = Math.sin(u.a);
+            const k = reversing ? -1 : 1, hx = Math.cos(u.a) * k, hy = Math.sin(u.a) * k;
             ns = (hx * CFG.stripe.ax + hy * CFG.stripe.ay) > 0 ? STATE.LIGHT : STATE.DARK;
         }
         const res = this.yard.cutAround(u.x, u.y, u.cfg.cutR, ns);
@@ -340,6 +502,10 @@ class YardScene extends Phaser.Scene {
     finish() {
         this.finished = true;
         for (const k in this.units) this.units[k].queue.length = 0;
+        this.refreshActions();
+        this.cameras.main.stopFollow();
+        this.cameras.main.zoomTo(1, 600);
+        this.cameras.main.pan(200, 320, 600);
         this.missedG.clear();
         Pacing.mark('first yard finished');
         Sound.ding();

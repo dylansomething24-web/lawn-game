@@ -14,14 +14,26 @@ const Pacing = {
 };
 
 const UI = {
-    scene: null, shown: {}, hintTimer: null, lastCov: -1, lastSec: -1,
+    scene: null, shown: {}, hintTimer: null, lastCov: -1, lastSec: -1, zoomed: true,
+
+    setActions(list) {
+        const box = this.$('actions');
+        box.innerHTML = '';
+        for (const a of list) {
+            const b = document.createElement('button');
+            b.className = 'abtn' + (a.label === 'Stop' ? ' stop' : '');
+            b.textContent = a.label;
+            b.disabled = !!a.off;
+            b.onclick = () => { Sound.init(); a.fn(); };
+            box.appendChild(b);
+        }
+    },
     $(id) { return document.getElementById(id); },
 
     init() {
         this.$('tool-mower').onclick = () => this.scene && this.scene.setTool('mower');
         this.$('tool-trimmer').onclick = () => this.scene && this.scene.setTool('trimmer');
-        this.$('btn-undo').onclick = () => this.scene && this.scene.undo();
-        this.$('btn-stop').onclick = () => this.scene && this.scene.stop();
+        this.$('btn-zoom').onclick = () => { if (this.scene) this.$('btn-zoom').textContent = this.scene.toggleZoom() ? 'Whole yard' : 'Zoom in'; };
         const rs = this.$('btn-restart');
         rs.onclick = () => {
             if (rs.dataset.armed) { this.restart(); return; }
@@ -33,7 +45,7 @@ const UI = {
         Debug.init();
     },
 
-    sceneReady(scene) { this.scene = scene; this.toolChanged('mower'); this.$('done').hidden = true; this.lastCov = -1; this.lastSec = -1; },
+    sceneReady(scene) { this.scene = scene; this.toolChanged('mower'); this.$('btn-zoom').textContent = this.zoomed ? 'Whole yard' : 'Zoom in'; this.$('done').hidden = true; this.lastCov = -1; this.lastSec = -1; },
 
     restart() {
         const rs = this.$('btn-restart'); delete rs.dataset.armed; rs.textContent = 'Restart';
