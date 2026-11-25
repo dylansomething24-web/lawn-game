@@ -1,4 +1,4 @@
-// Phase 1: the mowing feel. One yard, tap-to-route mower and trimmer, stripes, finish.
+// Phase 1: the mowing feel. One yard, lane-mowing mower, tap-a-target trimmer, stripes, finish.
 class YardScene extends Phaser.Scene {
     constructor() { super('yard'); }
 
@@ -25,11 +25,17 @@ class YardScene extends Phaser.Scene {
         this.drawObstacles();
         this.routeG = this.add.graphics().setDepth(7);
         this.ringG = this.add.graphics().setDepth(4);
+        this.targetG = this.add.graphics().setDepth(4);
 
         this.units = { mower: this.makeUnit('mower'), trimmer: this.makeUnit('trimmer') };
         this.active = 'mower';
         this.mstate = 'idle';          // mower: idle | drive | uturn | around | end | blocked
         this.units.mower.dir = null;
+        this.trimTargets = buildTrimTargets(this.yard);
+        this.pather = new TrimPather(this.yard, CFG.trimmer.collideR);
+        this.tjob = null;              // the target the trimmer is working on
+        this.targetCheckT = 0;
+        this.pendingCount = this.trimTargets.length;
 
         const cam = this.cameras.main;
         cam.setBounds(0, 0, 400, 640);
@@ -164,7 +170,11 @@ class YardScene extends Phaser.Scene {
         const A = [];
         if (this.finished) { UI.setActions(A); return; }
         if (this.active === 'trimmer') {
-            A.push({ label: 'Undo', fn: () => this.undo() }, { label: 'Stop', fn: () => this.stop() });
+            if (this.tjob) A.push({ label: 'Stop', fn: () => this.stop() });
+            else {
+                const n = this.pendingCount;
+                A.push({ label: n ? `Trim nearest (${n} left)` : 'All trimmed', fn: () => this.trimNearest(), off: !n });
+            }
         } else if (this.mstate === 'drive' || this.mstate === 'uturn' || this.mstate === 'around') {
             A.push({ label: 'Stop', fn: () => this.stop(), wide: true });
         } else if (this.mstate === 'end' || this.mstate === 'blocked') {
@@ -285,22 +295,109 @@ class YardScene extends Phaser.Scene {
             else UI.hint('swipe', "Swipe on the yard to send the mower in a direction, or use the Go buttons.");
             return;
         }
-        this.startClock();
-        const dx = x - u.x, dy = y - u.y;
-        if (dx * dx + dy * dy < CFG.stopTapRadius * CFG.stopTapRadius) { this.stop(); return; }
-        const want = this.yard.clamp(x, y, u.cfg.collideR);
-        const from = u.queue.length ? u.queue[u.queue.length - 1] : { x: u.x, y: u.y };
-        const p = this.reach(from, want, u.cfg.collideR);
-        if (Math.hypot(p.x - from.x, p.y - from.y) < 4) {   // nothing reachable that way
-            Sound.bump();
-            UI.hint(u.kind === 'mower' ? 'nofit' : 'nowalk', u.kind === 'mower'
-                ? "Mower won't fit there. Leave the tight spots for the trimmer."
-                : "Can't walk through that.");
-            return;
+        // trimmer: tap the thing you want trimmed (generous: anywhere near it counts)
+        const hit = this.targetAt(x, y, true);
+        if (hit) { if (hit !== this.tjob) this.trimTarget(hit); return; }
+        if (this.tjob) { this.stop(); return; }
+        const done = this.targetAt(x, y, false);
+        if (done) { UI.shown.trimmed = false; UI.hint('trimmed', done.name + " is already trimmed."); }
+        else UI.hint('tapoutline', "Tap something outlined in yellow, or press Trim nearest.");
+    }
+
+    // ---------- trimming by target ----------
+    distTo(t, x, y) {
+        let best = 1e9;
+        for (const run of t.runs) for (const p of run) { const d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y); if (d < best) best = d; }
+        return Math.sqrt(best);
+    }
+
+    targetAt(x, y, pending) {
+        let best = null, bd = 44;
+        for (const t of this.trimTargets) {
+            if ((t.left > 0) !== pending) continue;
+            const d = this.distTo(t, x, y);
+            if (d < bd) { bd = d; best = t; }
         }
-        if (p.short) UI.hint('short', "Something's in the way, so the route stops short of it. Go around.");
-        u.queue.push(p);
+        return best;
+    }
+
+    seeFn() {
+        const r = CFG.trimmer.collideR;
+        return (a, b) => { const p = this.reach(a, b, r); return Math.hypot(p.x - b.x, p.y - b.y) < 0.5; };
+    }
+
+    // Walk there, then trace every piece of the outline, nearest piece first.
+    trimPlan(t) {
+        const u = this.units.trimmer, see = this.seeFn(), out = [];
+        let cur = { x: u.x, y: u.y };
+        const runs = t.runs.map(r => r.slice());
+        while (runs.length) {
+            let bi = 0, bk = 0, bd = 1e9;
+            runs.forEach((run, i) => {
+                const idx = t.closed ? run.map((_, k) => k) : [0, run.length - 1];
+                for (const k of idx) { const d = Math.hypot(run[k].x - cur.x, run[k].y - cur.y); if (d < bd) { bd = d; bi = i; bk = k; } }
+            });
+            let run = runs.splice(bi, 1)[0];
+            if (t.closed) run = run.slice(bk).concat(run.slice(0, bk + 1));
+            else if (bk) run = run.reverse();
+            const path = this.pather.find(cur, run[0], see);
+            if (!path) continue;
+            out.push(...path, ...run.slice(1));
+            cur = run[run.length - 1];
+        }
+        return out;
+    }
+
+    trimTarget(t) {
+        const u = this.units.trimmer, plan = this.trimPlan(t);
+        if (!plan.length) { Sound.bump(); UI.hint('nowalk', "The trimmer can't get there."); return; }
+        this.startClock();
+        u.queue.length = 0; u.queue.push(...plan);
+        this.tjob = t;
         Sound.tick();
+        this.refreshActions();
+    }
+
+    trimNearest() {
+        const u = this.units.trimmer;
+        let best = null, bd = 1e9;
+        for (const t of this.trimTargets) if (t.left > 0) { const d = this.distTo(t, u.x, u.y); if (d < bd) { bd = d; best = t; } }
+        if (best) this.trimTarget(best);
+    }
+
+    updateTargets(dt) {
+        this.targetCheckT -= dt;
+        if (this.targetCheckT > 0) return;
+        this.targetCheckT = 0.2;
+        let n = 0;
+        for (const t of this.trimTargets) {
+            let left = 0;
+            for (const i of t.cells) if (this.yard.state[i] === STATE.UNCUT) left++;
+            t.left = left; if (left) n++;
+        }
+        if (n !== this.pendingCount) {
+            this.pendingCount = n;
+            if (this.active === 'trimmer') this.refreshActions();
+            if (!n && !this.finished) UI.hint('alltrimmed', "Everything's trimmed. If anything is still left, it's out in the open, so the mower can get it.");
+        }
+    }
+
+    drawTargets(time) {
+        const g = this.targetG; g.clear();
+        if (this.finished) return;
+        if (this.active !== 'trimmer' && this.yard.coverage() < CFG.trimHintAt) return;
+        const a = 0.55 + 0.3 * Math.sin(time / 230);
+        for (const t of this.trimTargets) {
+            if (t.left <= 0) continue;
+            const mine = t === this.tjob;
+            g.lineStyle(mine ? 3 : 2.5, mine ? 0xffffff : 0xffe14d, mine ? 0.85 : a);
+            for (const run of t.runs) {
+                g.beginPath(); g.moveTo(run[0].x, run[0].y);
+                for (let k = 1; k < run.length; k++) g.lineTo(run[k].x, run[k].y);
+                if (t.closed) g.closePath();
+                g.strokePath();
+            }
+        }
     }
 
     // Furthest point along a straight line the unit can reach before hitting something.
@@ -319,17 +416,17 @@ class YardScene extends Phaser.Scene {
 
     stop() {
         const u = this.units[this.active]; u.queue.length = 0;
-        if (u.kind === 'mower') { this.mstate = 'idle'; this.refreshActions(); }
+        if (u.kind === 'mower') this.mstate = 'idle'; else this.tjob = null;
+        this.refreshActions();
     }
-    undo() { const u = this.units[this.active]; u.queue.pop(); }
 
     setTool(kind) {
         if (kind === this.active || this.finished) return;
         this.units[this.active].queue.length = 0;
-        if (this.active === 'mower') this.mstate = 'idle';
+        if (this.active === 'mower') this.mstate = 'idle'; else this.tjob = null;
         this.active = kind;
         this.cameras.main.startFollow(this.units[kind].c, true, 0.12, 0.12);
-        if (kind === 'trimmer') UI.hint('trimtap', "Tap where you want to walk. The trimmer gets in close to everything.");
+        if (kind === 'trimmer') { this.targetCheckT = 0; UI.hint('trimtap', "Everything outlined in yellow still needs trimming. Tap one and the trimmer walks over and trims all the way around it. Or press Trim nearest."); }
         UI.toolChanged(kind);
         this.refreshActions();
     }
@@ -343,8 +440,11 @@ class YardScene extends Phaser.Scene {
         for (const k in this.units) { const u = this.units[k]; this.stepUnit(u, dt); if (k === this.active) anyMoving = u.moving; }
         const m = this.units.mower;
         if (!this.finished && !m.queue.length && (this.mstate === 'drive' || this.mstate === 'uturn' || this.mstate === 'around')) this.mowerStopped();
+        if (this.tjob && !this.units.trimmer.queue.length) { this.tjob = null; this.targetCheckT = 0; this.refreshActions(); }
         Sound.engine(this.finished ? 'off' : this.active, anyMoving);
 
+        this.updateTargets(dt);
+        this.drawTargets(time);
         this.drawRoute();
         this.drawRing(time);
         this.updateMissed(dt);
@@ -459,6 +559,14 @@ class YardScene extends Phaser.Scene {
             const u = this.units[k];
             if (!u.queue.length) continue;
             const col = k === 'mower' ? 0xffffff : 0xffc24a;
+            if (k === 'trimmer') {   // the trace is many small steps: draw a thin line and the end point
+                g.lineStyle(2, col, 0.6).beginPath(); g.moveTo(u.x, u.y);
+                for (const p of u.queue) g.lineTo(p.x, p.y);
+                g.strokePath();
+                const e = u.queue[u.queue.length - 1];
+                g.fillStyle(col, 0.95).fillCircle(e.x, e.y, 5); g.lineStyle(2, 0x1d1d1d, 0.9).strokeCircle(e.x, e.y, 5);
+                continue;
+            }
             let px = u.x, py = u.y;
             for (const p of u.queue) { this.dashed(g, px, py, p.x, p.y, col); px = p.x; py = p.y; }
             u.queue.forEach((p, i) => {

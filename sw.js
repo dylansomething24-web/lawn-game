@@ -1,8 +1,8 @@
 // Network-first: always try for the newest files, fall back to cache offline.
-const CACHE = 'cutabove-v2';
+const CACHE = 'cutabove-v3';
 const BASE = self.registration.scope;
 const ASSETS = ['', 'index.html', 'manifest.json', 'phaser.min.js',
-    'js/config.js', 'js/yard.js', 'js/sound.js', 'js/ui.js', 'js/scene.js',
+    'js/config.js', 'js/yard.js', 'js/sound.js', 'js/ui.js', 'js/trim.js', 'js/scene.js',
     'icons/icon-192.png', 'icons/icon-512.png'].map(p => BASE + p);
 
 self.addEventListener('install', e => {
