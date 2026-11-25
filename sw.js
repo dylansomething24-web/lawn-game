@@ -1,5 +1,5 @@
 // Network-first: always try for the newest files, fall back to cache offline.
-const CACHE = 'cutabove-v3';
+const CACHE = 'cutabove-v4';
 const BASE = self.registration.scope;
 const ASSETS = ['', 'index.html', 'manifest.json', 'phaser.min.js',
     'js/config.js', 'js/yard.js', 'js/sound.js', 'js/ui.js', 'js/trim.js', 'js/scene.js',

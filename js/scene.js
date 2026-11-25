@@ -48,13 +48,55 @@ class YardScene extends Phaser.Scene {
         this.input.on('pointerup', p => {
             const d = this.down; this.down = null;
             if (!d) return;
-            const dx = p.x - d.x, dy = p.y - d.y;
-            if (Math.hypot(dx, dy) >= CFG.swipeMin) this.onSwipe(dx, dy);
-            else this.onTap(d.wx, d.wy);
+            if (Math.hypot(p.x - d.x, p.y - d.y) < CFG.swipeMin) this.onTap(d.wx, d.wy);   // drags and swipes do nothing
         });
+        this.holdDir = null; this.engineStarted = false;
         UI.sceneReady(this);
         this.refreshActions();
-        UI.hint('start', "Swipe on the yard to send the mower straight. It mows until it reaches the edge. Tap the yard to stop it.");
+        UI.hint('start', UI.auto
+            ? "Press an arrow and the mower drives straight until it reaches the edge. Then it lines up the next lane for you."
+            : "Hold an arrow to drive the mower. Let go to stop.");
+    }
+
+    modeChanged() {
+        const u = this.units.mower;
+        this.holdDir = null;
+        if (this.active === 'mower') { u.queue.length = 0; this.mstate = 'idle'; }
+        this.refreshActions();
+        UI.shown.mode = false;
+        UI.hint('mode', UI.auto
+            ? "Auto: press an arrow and the mower drives the whole lane, then lines up the next one for you."
+            : "Manual: hold an arrow to drive. The mower only moves while you hold it.");
+    }
+
+    // ---------- manual: hold an arrow to drive ----------
+    holdStart(d) {
+        if (this.finished || this.active !== 'mower') return;
+        const u = this.units.mower;
+        if (!this.engineStarted) { Sound.pullStart(); this.engineStarted = true; }
+        this.startClock();
+        this.holdDir = d; u.dir = d; this.holdFrom = { x: u.x, y: u.y }; this.holdBumped = false;
+        this.mstate = 'hold';
+    }
+
+    holdEnd() {
+        const u = this.units.mower;
+        if (this.holdDir && this.holdFrom && Math.hypot(u.x - this.holdFrom.x, u.y - this.holdFrom.y) > 20) this.passes++;
+        this.holdDir = null;
+        if (this.mstate === 'hold') { u.queue.length = 0; this.mstate = 'idle'; }
+    }
+
+    holdDrive() {
+        const u = this.units.mower, d = this.holdDir;
+        if (!d || this.finished || this.active !== 'mower') return;
+        const t = this.reach({ x: u.x, y: u.y }, { x: u.x + d.x * 40, y: u.y + d.y * 40 }, u.cfg.collideR);
+        if (Math.hypot(t.x - u.x, t.y - u.y) < 1) {
+            u.queue.length = 0;
+            if (!this.holdBumped) { this.holdBumped = true; Sound.bump(); }
+            return;
+        }
+        this.holdBumped = false;
+        u.queue.length = 0; u.queue.push({ x: t.x, y: t.y, turn: true });
     }
 
     toggleZoom() {
@@ -67,17 +109,12 @@ class YardScene extends Phaser.Scene {
         if (this.startTime === null) { this.startTime = this.time.now; Pacing.mark('first move'); }
     }
 
-    // ---------- lane mowing ----------
-    onSwipe(dx, dy) {
-        if (this.finished || this.active !== 'mower') return;
-        const d = Math.abs(dx) > Math.abs(dy) ? { x: Math.sign(dx), y: 0 } : { x: 0, y: Math.sign(dy) };
-        this.startLane(d);
-    }
-
+    // ---------- auto: lane mowing ----------
     startLane(d) {
         const u = this.units.mower;
         if (this.finished) return;
-        Sound.init(); Sound.pullStart(); this.startClock();
+        Sound.init(); this.startClock();
+        if (!this.engineStarted) { Sound.pullStart(); this.engineStarted = true; }
         u.dir = d;
         const r = u.cfg.collideR, end = this.reach({ x: u.x, y: u.y }, { x: u.x + d.x * 2000, y: u.y + d.y * 2000 }, r);
         u.queue.length = 0;
@@ -106,7 +143,7 @@ class YardScene extends Phaser.Scene {
             UI.hint('blocked', "Something's in the way. Go around it, or turn back here and start the next lane.");
         } else {
             this.mstate = 'end';
-            UI.hint('end', "End of the lane. Pick which side the next lane goes. The mower lines itself up. Or swipe a new direction.");
+            UI.hint('end', "End of the lane. Pick which side the next lane goes, and the mower lines itself up. Or press New way to aim somewhere else.");
         }
         this.refreshActions();
     }
@@ -175,12 +212,16 @@ class YardScene extends Phaser.Scene {
                 const n = this.pendingCount;
                 A.push({ label: n ? `Trim nearest (${n} left)` : 'All trimmed', fn: () => this.trimNearest(), off: !n });
             }
+        } else if (!UI.auto) {
+            for (const [lab, d] of [['←', { x: -1, y: 0 }], ['↑', { x: 0, y: -1 }], ['↓', { x: 0, y: 1 }], ['→', { x: 1, y: 0 }]])
+                A.push({ label: lab, hold: true, down: () => this.holdStart(d), up: () => this.holdEnd() });
         } else if (this.mstate === 'drive' || this.mstate === 'uturn' || this.mstate === 'around') {
             A.push({ label: 'Stop', fn: () => this.stop(), wide: true });
         } else if (this.mstate === 'end' || this.mstate === 'blocked') {
             const S = this.sides();
             if (this.mstate === 'blocked') for (const s of S) A.push({ label: 'Around ' + this.arrow(s), fn: () => this.goAround(s), off: !this.aroundPath(s) });
             for (const s of S) A.push({ label: (this.mstate === 'blocked' ? 'Turn ' : 'Next lane ') + this.arrow(s), fn: () => this.uTurn(s), off: !this.laneShift(s) });
+            A.push({ label: 'New way', fn: () => this.stop() });
         } else {
             for (const [lab, d] of [['Go ←', { x: -1, y: 0 }], ['Go ↑', { x: 0, y: -1 }], ['Go ↓', { x: 0, y: 1 }], ['Go →', { x: 1, y: 0 }]])
                 A.push({ label: lab, fn: () => this.goDir(d) });
@@ -292,7 +333,7 @@ class YardScene extends Phaser.Scene {
         const u = this.units[this.active];
         if (u.kind === 'mower') {
             if (u.queue.length) this.stop();
-            else UI.hint('swipe', "Swipe on the yard to send the mower in a direction, or use the Go buttons.");
+            else UI.hint('arrows', UI.auto ? "Use the arrow buttons below to send the mower." : "Hold an arrow button below to drive.");
             return;
         }
         // trimmer: tap the thing you want trimmed (generous: anywhere near it counts)
@@ -416,7 +457,7 @@ class YardScene extends Phaser.Scene {
 
     stop() {
         const u = this.units[this.active]; u.queue.length = 0;
-        if (u.kind === 'mower') this.mstate = 'idle'; else this.tjob = null;
+        if (u.kind === 'mower') { this.mstate = 'idle'; this.holdDir = null; } else this.tjob = null;
         this.refreshActions();
     }
 
@@ -436,6 +477,7 @@ class YardScene extends Phaser.Scene {
         const dt = Math.min(0.05, delta / 1000);
         if (this.startTime !== null && !this.finished) this.elapsed = (time - this.startTime) / 1000;
 
+        this.holdDrive();
         let anyMoving = false;
         for (const k in this.units) { const u = this.units[k]; this.stepUnit(u, dt); if (k === this.active) anyMoving = u.moving; }
         const m = this.units.mower;
@@ -464,7 +506,7 @@ class YardScene extends Phaser.Scene {
         if (dist < 0.5) { u.queue.shift(); this.arrived(u); return; }
         const want = Math.atan2(dy, dx);
         let diff = Phaser.Math.Angle.Wrap(want - u.a);
-        if (Math.abs(diff) > 2.6 && dist < 50) {   // short move straight behind: back up instead of spinning around
+        if (Math.abs(diff) > 2.6 && dist < 50 && !t.turn) {   // short move straight behind: back up instead of spinning around
             const step = Math.min(dist, u.cfg.speed * 0.6 * dt);
             const nx = u.x + Math.cos(want) * step, ny = u.y + Math.sin(want) * step;
             if (this.yard.collides(nx, ny, u.cfg.collideR)) { u.queue.length = 0; return; }

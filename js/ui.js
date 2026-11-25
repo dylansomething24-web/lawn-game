@@ -14,19 +14,34 @@ const Pacing = {
 };
 
 const UI = {
-    scene: null, shown: {}, hintTimer: null, lastCov: -1, lastSec: -1, zoomed: true,
+    scene: null, shown: {}, hintTimer: null, lastCov: -1, lastSec: -1, zoomed: true, auto: true, held: null,
 
     setActions(list) {
+        this.releaseHold();
         const box = this.$('actions');
         box.innerHTML = '';
+        box.classList.toggle('many', list.length > 4);
         for (const a of list) {
             const b = document.createElement('button');
-            b.className = 'abtn' + (a.label === 'Stop' ? ' stop' : '');
+            b.className = 'abtn' + (a.label === 'Stop' ? ' stop' : '') + (a.hold ? ' hold' : '');
             b.textContent = a.label;
             b.disabled = !!a.off;
-            b.onclick = () => { Sound.init(); a.fn(); };
+            if (a.hold) {   // hold-to-drive: works only while the finger is down
+                b.onpointerdown = e => {
+                    e.preventDefault(); Sound.init();
+                    this.releaseHold();
+                    try { b.setPointerCapture(e.pointerId); } catch (err) {}
+                    this.held = { b, up: a.up }; b.classList.add('held'); a.down();
+                };
+                b.onpointerup = b.onpointercancel = b.onlostpointercapture = () => { if (this.held && this.held.b === b) this.releaseHold(); };
+                b.oncontextmenu = e => e.preventDefault();
+            } else b.onclick = () => { Sound.init(); a.fn(); };
             box.appendChild(b);
         }
+    },
+    releaseHold() {
+        const h = this.held; if (!h) return;
+        this.held = null; h.b.classList.remove('held'); h.up();
     },
     $(id) { return document.getElementById(id); },
 
@@ -40,12 +55,19 @@ const UI = {
             rs.dataset.armed = '1'; rs.textContent = 'Sure?';
             setTimeout(() => { delete rs.dataset.armed; rs.textContent = 'Restart'; }, 2200);
         };
+        const md = this.$('btn-mode');
+        md.onclick = () => { this.auto = !this.auto; this.showMode(); if (this.scene) this.scene.modeChanged(); };
+        window.addEventListener('pointerup', () => this.releaseHold());
+        window.addEventListener('blur', () => this.releaseHold());
+        document.addEventListener('visibilitychange', () => this.releaseHold());
         this.$('btn-sound').onclick = () => { Sound.init(); this.$('btn-sound').textContent = Sound.toggle() ? 'Sound on' : 'Sound off'; };
         this.$('done-again').onclick = () => this.restart();
         Debug.init();
     },
 
-    sceneReady(scene) { this.scene = scene; this.toolChanged('mower'); this.$('btn-zoom').textContent = this.zoomed ? 'Whole yard' : 'Zoom in'; this.$('done').hidden = true; this.lastCov = -1; this.lastSec = -1; },
+    showMode() { const md = this.$('btn-mode'); md.textContent = this.auto ? 'Auto' : 'Manual'; md.classList.toggle('auto', this.auto); },
+
+    sceneReady(scene) { this.scene = scene; this.showMode(); this.toolChanged('mower'); this.$('btn-zoom').textContent = this.zoomed ? 'Whole yard' : 'Zoom in'; this.$('done').hidden = true; this.lastCov = -1; this.lastSec = -1; },
 
     restart() {
         const rs = this.$('btn-restart'); delete rs.dataset.armed; rs.textContent = 'Restart';
