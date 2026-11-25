@@ -1,10 +1,10 @@
 // Every tunable number lives here (L06 rule: balancing never means digging through code).
 const CFG = {
     cell: 4,                 // grass cell size in pixels
-    mower:   { speed: 90, turnRate: 9.4, cutR: 10, collideR: 15, lane: 18 },   // turnRate in radians per second; lane = spacing between passes
+    mower:   { speed: 135, turnRate: 11, cutR: 10, collideR: 15, lane: 18 },   // turnRate in radians per second; lane = spacing between passes
     zoom: 1.6,                     // close-up camera zoom (the "Whole yard" button sets 1)
     swipeMin: 26,                  // a drag longer than this (game pixels) counts as a swipe
-    trimmer: { speed: 60, turnRate: 16,  cutR: 7,  collideR: 3 },
+    trimmer: { speed: 100, turnRate: 18,  cutR: 7,  collideR: 3 },   // also the edger and blower walking speed
     moveWhileTurningUnder: 0.35,   // radians; sharper turns pivot in place first
     stopTapRadius: 22,             // tap this close to the active unit to stop it
     finishAt: 0.995,               // coverage that counts as a finished yard

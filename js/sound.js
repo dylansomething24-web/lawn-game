@@ -85,6 +85,19 @@ const Sound = {
         o.connect(g); g.connect(this.master); o.start(t); o.stop(t + 0.2);
     },
 
+    buzz() {
+        if (!this.ctx) return;
+        const t = this.ctx.currentTime;
+        this.tone(180, t, 0.12, 'square', 0.05); this.tone(180, t + 0.18, 0.12, 'square', 0.05);
+    },
+
+    cash() {
+        if (!this.ctx) return;
+        const t = this.ctx.currentTime;
+        this.noiseBurst(t, 0.05, 3000, 0.25);
+        this.tone(1568, t + 0.05, 0.25, 'triangle', 0.15); this.tone(2093, t + 0.13, 0.4, 'triangle', 0.12);
+    },
+
     tick() {
         if (!this.ctx) return;
         this.tone(1200, this.ctx.currentTime, 0.05, 'triangle', 0.08);

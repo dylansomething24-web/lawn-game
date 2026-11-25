@@ -1,4 +1,4 @@
-// Pacing log (L06): records real play time for each milestone, first time only per session.
+// Pacing log (L06): records real play time for each milestone, first time only per save.
 const Pacing = {
     t0: performance.now(), marks: {},
     mark(name) {
@@ -6,15 +6,20 @@ const Pacing = {
         this.marks[name] = Math.round((performance.now() - this.t0) / 1000);
         try {
             const all = JSON.parse(localStorage.getItem('cutabove_pacing') || '[]');
-            all.push({ name, sec: this.marks[name], at: new Date().toISOString() });
+            if (all.some(m => m.name === name)) return;
+            const played = typeof Game !== 'undefined' && Game.s ? Game.s.playSec || 0 : 0;
+            all.push({ name, sec: Math.round(played), at: new Date().toISOString() });
             localStorage.setItem('cutabove_pacing', JSON.stringify(all.slice(-200)));
         } catch (e) { /* storage unavailable: the log is optional */ }
         Debug.refresh();
     },
 };
 
+// The yard view's controls. The street and menus live in screens.js.
 const UI = {
-    scene: null, shown: {}, hintTimer: null, lastCov: -1, lastSec: -1, zoomed: true, auto: true, held: null,
+    scene: null, shown: {}, hintTimer: null, lastCov: -1, zoomed: true, auto: true, held: null,
+
+    $(id) { return document.getElementById(id); },
 
     setActions(list) {
         this.releaseHold();
@@ -43,17 +48,20 @@ const UI = {
         const h = this.held; if (!h) return;
         this.held = null; h.b.classList.remove('held'); h.up();
     },
-    $(id) { return document.getElementById(id); },
 
     init() {
-        this.$('tool-mower').onclick = () => this.scene && this.scene.setTool('mower');
-        this.$('tool-trimmer').onclick = () => this.scene && this.scene.setTool('trimmer');
         this.$('btn-zoom').onclick = () => { if (this.scene) this.$('btn-zoom').textContent = this.scene.toggleZoom() ? 'Whole yard' : 'Zoom in'; };
-        const rs = this.$('btn-restart');
-        rs.onclick = () => {
-            if (rs.dataset.armed) { this.restart(); return; }
-            rs.dataset.armed = '1'; rs.textContent = 'Sure?';
-            setTimeout(() => { delete rs.dataset.armed; rs.textContent = 'Restart'; }, 2200);
+        const fin = this.$('btn-finish');
+        fin.onclick = () => {
+            const sc = this.scene; if (!sc || sc.finished) return;
+            const ready = sc.yard.mowCoverage() >= CFG.finishAt && sc.tasksDone();
+            if (!ready && !fin.dataset.armed) {
+                fin.dataset.armed = '1'; fin.classList.add('armed'); fin.textContent = 'Not done. Sure?';
+                setTimeout(() => { delete fin.dataset.armed; fin.classList.remove('armed'); fin.textContent = 'Finish job'; }, 2500);
+                return;
+            }
+            delete fin.dataset.armed; fin.classList.remove('armed'); fin.textContent = 'Finish job';
+            sc.finish();
         };
         const md = this.$('btn-mode');
         md.onclick = () => { this.auto = !this.auto; this.showMode(); if (this.scene) this.scene.modeChanged(); };
@@ -61,56 +69,83 @@ const UI = {
         window.addEventListener('blur', () => this.releaseHold());
         document.addEventListener('visibilitychange', () => this.releaseHold());
         this.$('btn-sound').onclick = () => { Sound.init(); this.$('btn-sound').textContent = Sound.toggle() ? 'Sound on' : 'Sound off'; };
-        this.$('done-again').onclick = () => this.restart();
         Debug.init();
     },
 
     showMode() { const md = this.$('btn-mode'); md.textContent = this.auto ? 'Auto' : 'Manual'; md.classList.toggle('auto', this.auto); },
 
-    sceneReady(scene) { this.scene = scene; this.showMode(); this.toolChanged('mower'); this.$('btn-zoom').textContent = this.zoomed ? 'Whole yard' : 'Zoom in'; this.$('done').hidden = true; this.lastCov = -1; this.lastSec = -1; },
-
-    restart() {
-        const rs = this.$('btn-restart'); delete rs.dataset.armed; rs.textContent = 'Restart';
-        this.$('done').hidden = true;
-        this.shown = { start: true };
-        this.scene.scene.restart();
+    sceneReady(scene) {
+        this.scene = scene; this.showMode(); this.lastCov = -1;
+        this.$('btn-zoom').textContent = this.zoomed ? 'Whole yard' : 'Zoom in';
+        this.$('y-name').textContent = scene.visit.cust.name;
+        const row = this.$('toolrow'); row.innerHTML = '';
+        for (const k of scene.toolList) {
+            const b = document.createElement('button');
+            b.className = 'tbtn'; b.id = 'tool-' + k; b.textContent = TOOL_LABEL[k];
+            b.onclick = () => { Sound.init(); scene.setTool(k); };
+            row.appendChild(b);
+        }
+        this.toolChanged('mower');
+        this.extra(null);
     },
 
     toolChanged(kind) {
-        this.$('tool-mower').classList.toggle('on', kind === 'mower');
-        this.$('tool-trimmer').classList.toggle('on', kind === 'trimmer');
+        for (const b of this.$('toolrow').children) b.classList.toggle('on', b.id === 'tool-' + kind);
     },
 
-    hud(cov, sec) {
+    hud(cov) {
         const pct = Math.floor(cov * 1000) / 10;
         if (pct !== this.lastCov) {
             this.lastCov = pct;
             this.$('h-cov').textContent = pct.toFixed(1) + '%';
             this.$('h-bar').style.width = Math.min(100, pct) + '%';
         }
-        const s = Math.floor(sec);
-        if (s !== this.lastSec) { this.lastSec = s; this.$('h-time').textContent = this.fmt(s); }
         Debug.tick(cov);
     },
 
-    fmt(s) { return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0'); },
+    // the customer's order, with what's done
+    order(sc) {
+        const box = this.$('y-order'), out = [];
+        const mc = sc.yard.mowCoverage();
+        out.push(`<span class="chip ${mc >= CFG.finishAt ? 'ok' : ''}">Mow ${mc >= CFG.finishAt ? '✓' : Math.floor(mc * 100) + '%'}</span>`);
+        const tool = { trim: 'trimmer', edge: 'edger', blow: 'blower' }, word = { trim: 'Trim', edge: 'Edge', blow: 'Blow' };
+        for (const t of ['trim', 'edge', 'blow']) {
+            if (!sc.visit.tasks.includes(t)) continue;
+            if (!sc.units[tool[t]]) { out.push(`<span class="chip no">${word[t]}: no ${tool[t]}</span>`); continue; }
+            const n = sc.pendingCount[tool[t]] || 0;
+            out.push(`<span class="chip ${n ? '' : 'ok'}">${word[t]} ${n ? n + ' left' : '✓'}</span>`);
+        }
+        if (sc.visit.price) out.push(`<span class="chip">$${sc.visit.price}</span>`);
+        const html = out.join('');
+        if (html !== this.lastOrder) { box.innerHTML = html; this.lastOrder = html; }
+    },
+
+    // one extra button floating over the yard (text Kyle about the dog)
+    extra(label, fn) {
+        const box = this.$('y-extra'); box.innerHTML = '';
+        if (!label) return;
+        const b = document.createElement('button'); b.className = 'btn mini'; b.textContent = '📱 ' + label;
+        b.onclick = () => { Sound.init(); fn(); };
+        box.appendChild(b);
+    },
+
+    // a choice that stops play (mower broke)
+    modal(text, choices, cb) {
+        Screens.sheet(`<h2>${text}</h2><div class="btns" style="grid-template-columns:1fr">${choices.map((c, i) => `<button class="btn ${i === 0 ? 'go' : ''}" data-i="${i}">${c.label}</button>`).join('')}</div>`, false);
+        for (const b of document.querySelectorAll('#sheet [data-i]')) b.onclick = () => { Screens.closeSheet(); cb(choices[+b.dataset.i].act); };
+    },
 
     hint(key, text) {
         if (this.shown[key]) return;
         this.shown[key] = true;
+        this.say(text);
+    },
+    say(text, ms) {
         const h = this.$('hint');
         this.$('hint-text').textContent = text;
         h.classList.add('show');
         clearTimeout(this.hintTimer);
-        this.hintTimer = setTimeout(() => h.classList.remove('show'), 6500);
-    },
-
-    showDone(sec, cov, passes) {
-        this.$('done-time').textContent = this.fmt(sec);
-        this.$('done-cov').textContent = (Math.floor(cov * 1000) / 10).toFixed(1) + '%';
-        this.$('done-passes').textContent = passes;
-        this.$('done').hidden = false;
-        this.$('hint').classList.remove('show');
+        this.hintTimer = setTimeout(() => h.classList.remove('show'), ms || 6500);
     },
 };
 
@@ -120,8 +155,13 @@ const Debug = {
     init() {
         if (!this.on) return;
         this.el = document.getElementById('debug'); this.el.hidden = false;
-        document.getElementById('dbg-mowall').onclick = () => UI.scene && UI.scene.debugMowAll();
-        document.getElementById('dbg-clear').onclick = () => { try { localStorage.removeItem('cutabove_pacing'); } catch (e) {} this.refresh(); };
+        const $ = id => document.getElementById(id);
+        $('dbg-finish').onclick = () => { if (UI.scene && Screens.cur === 'yard') { UI.scene.debugFinish(); } };
+        $('dbg-money').onclick = () => { Game.s.money += 500; Game.changed(); };
+        $('dbg-rep').onclick = () => { Game.addRep(10); Game.changed(); };
+        $('dbg-five').onclick = () => { if (Game.s.phase === 'day' && Game.s.clock < 17 * 60) Game.tick(17 * 60 - Game.s.clock); };
+        $('dbg-week').onclick = () => { if (Game.s.phase === 'morning') { Game.s.day = 4; Game.s.phase = 'day'; Game.endDay(); Game.nextDay(); Screens.show(); } };
+        $('dbg-clear').onclick = () => { try { localStorage.removeItem('cutabove_pacing'); } catch (e) {} this.refresh(); };
         this.refresh();
     },
     tick(cov) {
@@ -131,13 +171,13 @@ const Debug = {
         if (now - this.t > 1000) {
             this.fps = Math.round(this.frames * 1000 / (now - this.t)); this.frames = 0; this.t = now;
             const y = UI.scene && UI.scene.yard;
-            document.getElementById('dbg-stats').textContent = `fps ${this.fps} | cells ${y ? y.cut + '/' + y.total : '-'} | cov ${(cov * 100).toFixed(2)}%`;
+            document.getElementById('dbg-stats').textContent = `fps ${this.fps} | mow ${(cov * 100).toFixed(1)}% | stripes ${y ? y.stripeQuality().toFixed(2) : '-'}`;
         }
     },
     refresh() {
         if (!this.on) return;
         let all = [];
         try { all = JSON.parse(localStorage.getItem('cutabove_pacing') || '[]'); } catch (e) {}
-        document.getElementById('dbg-pacing').textContent = all.slice(-8).map(m => `${m.name}: ${m.sec}s`).join('\n') || 'no pacing marks yet';
+        document.getElementById('dbg-pacing').textContent = all.slice(-8).map(m => `${m.name}: ${Math.round(m.sec / 60)}m`).join('\n') || 'no pacing marks yet';
     },
 };

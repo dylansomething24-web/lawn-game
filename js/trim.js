@@ -74,9 +74,9 @@ function buildTrimTargets(yard, scene) {
     const def = yard.def, r = CFG.trimmer.collideR, d = r + 0.6, step = 3, B = def.bounds;
     const ok = p => !yard.collides(p.x, p.y, r);
     const targets = [];
-    const bedNames = def.solids.filter(s => s.kind === 'bed').sort((a, b) => a.x - b.x);
-    const nameOf = s => s.kind === 'bed' ? (bedNames.indexOf(s) === 0 ? 'Left flower bed' : 'Right flower bed')
-        : ({ tree: 'Tree', birdbath: 'Birdbath', mailbox: 'Mailbox', steps: 'Porch steps' })[s.kind] || s.kind;
+    const NAMES = { bed: 'Flower bed', tree: 'Tree', birdbath: 'Birdbath', mailbox: 'Mailbox', steps: 'Porch steps', shrub: 'Shrub',
+        gnome: 'Garden gnome', swing: 'Swing set', doghouse: 'Doghouse', toy: 'Toy', sprinkler: 'Sprinkler head' };
+    const nameOf = s => NAMES[s.kind] || s.kind;
 
     // a closed outline split wherever it runs into something (a bed against the house, etc.)
     const fromLoop = (name, pts) => {
@@ -115,8 +115,9 @@ function buildTrimTargets(yard, scene) {
         targets.push(fromLoop(nameOf(s), pts));
     }
     const L = def.lawn;
-    targets.push(line('Left fence', { x: B.x0 + d, y: B.y0 + d }, { x: B.x0 + d, y: L.y1 }));
-    targets.push(line('Right fence', { x: B.x1 - d, y: B.y0 + d }, { x: B.x1 - d, y: L.y1 }));
+    const sideName = k => (def.sides || [])[k] === 'hedge' ? 'hedge' : 'fence';
+    targets.push(line('Left ' + sideName(0), { x: B.x0 + d, y: B.y0 + d }, { x: B.x0 + d, y: L.y1 }));
+    targets.push(line('Right ' + sideName(1), { x: B.x1 - d, y: B.y0 + d }, { x: B.x1 - d, y: L.y1 }));
     targets.push(line('House wall', { x: B.x0 + d, y: B.y0 + d }, { x: B.x1 - d, y: B.y0 + d }));
 
     // the grass each target is responsible for: every lawn cell its walk passes within cutting reach of
@@ -138,4 +139,62 @@ function buildTrimTargets(yard, scene) {
         t.left = t.cells.length;
     }
     return targets.filter(t => t.runs.length && t.cells.length);
+}
+
+const HARD_NAMES = { driveway: 'Driveway', walk: 'Front walk', sidewalk: 'Sidewalk' };
+
+// Edging: the line where grass meets each hard surface. The edger walks right along it.
+function buildEdgeTargets(yard) {
+    const r = CFG.trimmer.collideR, step = 3, out = [];
+    for (const h of yard.def.hard) {
+        const sides = [
+            { a: { x: h.x, y: h.y }, b: { x: h.x + h.w, y: h.y }, n: { x: 0, y: -1 } },
+            { a: { x: h.x + h.w, y: h.y }, b: { x: h.x + h.w, y: h.y + h.h }, n: { x: 1, y: 0 } },
+            { a: { x: h.x + h.w, y: h.y + h.h }, b: { x: h.x, y: h.y + h.h }, n: { x: 0, y: 1 } },
+            { a: { x: h.x, y: h.y + h.h }, b: { x: h.x, y: h.y }, n: { x: -1, y: 0 } },
+        ];
+        const runs = [];
+        for (const s of sides) {
+            const len = Math.hypot(s.b.x - s.a.x, s.b.y - s.a.y), n = Math.ceil(len / step);
+            let cur = [];
+            for (let k = 0; k <= n; k++) {
+                const p = { x: s.a.x + (s.b.x - s.a.x) * k / n, y: s.a.y + (s.b.y - s.a.y) * k / n };
+                const good = yard.isLawn(p.x + s.n.x * 3, p.y + s.n.y * 3) && !yard.collides(p.x, p.y, r, true);
+                if (good) cur.push(p); else if (cur.length) { if (cur.length > 2) runs.push(cur); cur = []; }
+            }
+            if (cur.length > 2) runs.push(cur);
+        }
+        if (!runs.length) continue;
+        const total = runs.reduce((s, run) => s + run.length, 0);
+        out.push({ name: HARD_NAMES[h.kind] + ' edge', kind: 'edge', hard: h, runs, closed: false, hit: runs.map(run => new Uint8Array(run.length)), total, done: 0, left: total });
+    }
+    return out;
+}
+
+// Blowing: back and forth along each hard surface, clearing clippings within reach.
+function buildBlowTargets(yard) {
+    const r = CFG.trimmer.collideR, out = [], lane = 36, step = 4;
+    for (const h of yard.def.hard) {
+        const long = h.w >= h.h, across = long ? h.h : h.w, n = Math.max(1, Math.ceil(across / lane));
+        const pts = [];
+        for (let k = 0; k < n; k++) {
+            const off = across * (k + 0.5) / n, forward = k % 2 === 0;
+            const L = long ? h.w : h.h, m = Math.ceil(L / step);
+            for (let j = 0; j <= m; j++) {
+                const t = (forward ? j : m - j) / m * L;
+                const p = long ? { x: h.x + t, y: h.y + off } : { x: h.x + off, y: h.y + t };
+                if (!yard.collides(p.x, p.y, r, true)) pts.push(p);
+            }
+        }
+        // split wherever consecutive points jump (something was in the way)
+        const runs = []; let cur = [];
+        for (const p of pts) {
+            const last = cur[cur.length - 1];
+            if (last && Math.hypot(p.x - last.x, p.y - last.y) > step * 2.5 && cur.length) { runs.push(cur); cur = []; }
+            cur.push(p);
+        }
+        if (cur.length) runs.push(cur);
+        out.push({ name: HARD_NAMES[h.kind], kind: 'blow', hard: h, runs: runs.filter(x => x.length > 1), closed: false, left: 0 });
+    }
+    return out.filter(t => t.runs.length);
 }

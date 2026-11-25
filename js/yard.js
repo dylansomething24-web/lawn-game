@@ -1,33 +1,12 @@
-// Walt's yard (L02 section 13, house 1): the phase-1 test yard.
-// World is 400 x 640. Grass is tracked in a grid of CFG.cell-sized cells.
-const WALT_YARD = {
-    name: "Walt's yard",
-    lawn:   { x0: 16, y0: 52, x1: 384, y1: 560 },
-    bounds: { x0: 16, y0: 52, x1: 384, y1: 588 },   // where units can stand (sidewalk included)
-    hard: [                                           // hard surfaces: no grass, mowers may cross
-        { x: 300, y: 52,  w: 56,  h: 536, kind: 'driveway' },
-        { x: 190, y: 64,  w: 20,  h: 496, kind: 'walk' },
-        { x: 16,  y: 560, w: 368, h: 28,  kind: 'sidewalk' },
-    ],
-    solids: [                                         // nothing drives through these
-        { type: 'rect',   x: 24,  y: 52, w: 126, h: 24, kind: 'bed' },
-        { type: 'rect',   x: 226, y: 52, w: 70,  h: 20, kind: 'bed' },
-        { type: 'rect',   x: 184, y: 52, w: 32,  h: 12, kind: 'steps' },
-        { type: 'circle', x: 92,  y: 250, r: 24, kind: 'tree' },
-        { type: 'circle', x: 252, y: 380, r: 10, kind: 'birdbath' },
-        { type: 'circle', x: 40,  y: 548, r: 6,  kind: 'mailbox' },
-    ],
-    start: {
-        mower:   { x: 328, y: 520, a: -Math.PI / 2 },
-        trimmer: { x: 200, y: 96,  a: Math.PI / 2 },
-    },
-};
-
+// The grass grid for one yard. Yard layouts live in yards.js.
 const STATE = { NONE: 0, UNCUT: 1, LIGHT: 2, DARK: 3, TRIM: 4 };
 
 class Yard {
-    constructor(def) {
-        this.def = def;
+    // extraSolids: things found on earlier visits (sprinkler heads) that now get mowed around
+    constructor(def, extraSolids) {
+        this.def = Object.assign({}, def, { solids: def.solids.concat(extraSolids || []) });
+        def = this.def;
+        this.dynamic = [];   // moving things (a loose dog): { x, y, r }
         const L = def.lawn, c = CFG.cell;
         this.ox = L.x0; this.oy = L.y0;
         this.cols = Math.round((L.x1 - L.x0) / c);
@@ -41,6 +20,46 @@ class Yard {
             this.noise[i] = Math.random();
             if (this.isLawn(x, y)) { this.state[i] = STATE.UNCUT; this.total++; }
         }
+        // which cells the mower itself can reach (the rest is trimmer work)
+        this.reach = new Uint8Array(this.state.length);
+        const m = CFG.mower, rr = m.cutR * m.cutR, B = def.bounds;
+        for (let y = B.y0; y <= B.y1; y += 2) for (let x = B.x0; x <= B.x1; x += 2) {
+            if (this.collides(x, y, m.collideR, true)) continue;
+            const q0 = Math.max(0, Math.floor((x - m.cutR - this.ox) / c)), q1 = Math.min(this.cols - 1, Math.floor((x + m.cutR - this.ox) / c));
+            const r0 = Math.max(0, Math.floor((y - m.cutR - this.oy) / c)), r1 = Math.min(this.rows - 1, Math.floor((y + m.cutR - this.oy) / c));
+            for (let r = r0; r <= r1; r++) for (let q = q0; q <= q1; q++) {
+                const i = r * this.cols + q;
+                if (this.state[i] === STATE.NONE || this.reach[i]) continue;
+                const dx = this.ox + (q + 0.5) * c - x, dy = this.oy + (r + 0.5) * c - y;
+                if (dx * dx + dy * dy <= rr) this.reach[i] = 1;
+            }
+        }
+        this.reachTotal = 0; for (let i = 0; i < this.reach.length; i++) this.reachTotal += this.reach[i];
+        this.reachCut = 0;
+    }
+
+    isHard(x, y) {
+        for (const h of this.def.hard) if (x >= h.x && x < h.x + h.w && y >= h.y && y < h.y + h.h) return h;
+        return null;
+    }
+
+    // share of the mower's grass that's been cut (trimmer-only cells don't count against mowing)
+    mowCoverage() { return this.reachTotal ? this.reachCut / this.reachTotal : 0; }
+
+    // How clean the stripes are: share of mowed cells whose four neighbors are the same shade.
+    // Clean even lanes score about 0.5 or more; wandering, criss-crossed mowing scores much lower.
+    stripeQuality() {
+        let n = 0, good = 0;
+        const S = this.state, W = this.cols;
+        for (let r = 1; r < this.rows - 1; r++) for (let q = 1; q < W - 1; q++) {
+            const i = r * W + q, s = S[i];
+            if (s !== STATE.LIGHT && s !== STATE.DARK) continue;
+            n++;
+            let same = true;
+            for (const j of [i - 1, i + 1, i - W, i + W]) { const t = S[j]; if ((t === STATE.LIGHT || t === STATE.DARK) && t !== s) { same = false; break; } }
+            if (same) good++;
+        }
+        return n ? good / n : 0;
     }
 
     isLawn(x, y) {
@@ -57,10 +76,11 @@ class Yard {
         const dx = x - cx, dy = y - cy; return dx * dx + dy * dy < pad * pad || (pad === 0 && x >= s.x && x < s.x + s.w && y >= s.y && y < s.y + s.h);
     }
 
-    collides(x, y, r) {
+    collides(x, y, r, staticOnly) {
         const B = this.def.bounds;
         if (x < B.x0 + r || x > B.x1 - r || y < B.y0 + r || y > B.y1 - r) return true;
         for (const s of this.def.solids) if (Yard.inSolid(s, x, y, r)) return true;
+        if (!staticOnly) for (const d of this.dynamic) { const dx = x - d.x, dy = y - d.y; if (dx * dx + dy * dy < (d.r + r) * (d.r + r)) return true; }
         return false;
     }
 
@@ -85,7 +105,7 @@ class Yard {
             let ns = newState;
             if (newState === STATE.TRIM && s !== STATE.UNCUT) continue;   // the trimmer doesn't wipe out stripes
             if (s === ns) continue;
-            if (s === STATE.UNCUT) { this.cut++; out.fresh++; }
+            if (s === STATE.UNCUT) { this.cut++; out.fresh++; if (this.reach[i]) this.reachCut++; }
             this.state[i] = ns; out.changed.push(i);
         }
         return out;
@@ -107,7 +127,7 @@ class Yard {
         const c = CFG.cell, q = i % this.cols, r = (i / this.cols) | 0;
         ctx.fillStyle = this.colorFor(i);
         ctx.fillRect(q * c, r * c, c, c);
-        if (this.state[i] === STATE.UNCUT && this.noise[i] > 0.62) {   // shaggy tufts on uncut grass
+        if (this.state[i] === STATE.UNCUT && this.noise[i] > (this.overgrown ? 0.3 : 0.62)) {   // shaggy tufts on uncut grass
             const t = CFG.colors.tuft;
             ctx.fillStyle = `rgb(${(t >> 16) & 255},${(t >> 8) & 255},${t & 255})`;
             const ox = Math.floor(this.noise[i] * 37) % c;
@@ -120,9 +140,9 @@ class Yard {
         for (let i = 0; i < this.state.length; i++) if (this.state[i] !== STATE.NONE) this.paintCell(ctx, i);
     }
 
-    uncutCenters() {
+    uncutCenters(mowerOnly) {
         const c = CFG.cell, out = [];
-        for (let i = 0; i < this.state.length; i++) if (this.state[i] === STATE.UNCUT)
+        for (let i = 0; i < this.state.length; i++) if (this.state[i] === STATE.UNCUT && (!mowerOnly || this.reach[i]))
             out.push({ x: this.ox + (i % this.cols) * c, y: this.oy + ((i / this.cols) | 0) * c });
         return out;
     }
