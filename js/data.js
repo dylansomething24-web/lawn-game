@@ -6,8 +6,8 @@ const CUSTOMERS = [
       expect: 2.5, budget: 45, start: 'list', day: 0, gossip: 1.5, tipChance: 0.6,
       blurb: "Lemonade on the porch. Tells the whole block everything you do, good or bad." },
     { id: 'feldman', house: 3, name: 'Gus Feldman', who: 'The Measurer', archetype: 'Measurer', yard: 'feldman', tasks: ['mow', 'trim'],
-      expect: 4, budget: 50, start: 'list', day: 1,
-      blurb: "Wants exactly three inches. Checks with a ruler. Notices every missed strip." },
+      expect: 4, budget: 50, start: 'list', day: 1, stripes: 'v',
+      blurb: "Wants exactly three inches and up-and-down stripes. Checks with a ruler." },
     { id: 'henderson', house: 4, name: 'The Hendersons', who: 'The Loyalists', archetype: 'Loyalist', yard: 'henderson', tasks: ['mow', 'trim'],
       expect: 3, budget: 65, start: 'list', day: 2,
       blurb: "A young family. Slow to trust, but once they do, they tell everyone." },
@@ -18,8 +18,8 @@ const CUSTOMERS = [
       expect: 3, budget: 34, start: 'knock', haggle: true,
       blurb: "Wants a deal every time. But he pays cash, on the spot, every time." },
     { id: 'ditmore', house: 6, name: 'Pam and Ron Ditmore', who: 'The Critics', archetype: 'Critic', yard: 'ditmore', tasks: ['mow', 'trim', 'edge', 'blow'],
-      expect: 4.5, budget: 85, start: 'knock', needRep: 25,
-      blurb: "Always one thing wrong. Pay well if you can live with the notes." },
+      expect: 4.5, budget: 85, start: 'knock', needRep: 25, stripes: 'h',
+      blurb: "Side-to-side stripes, always one thing wrong. Pay well if you can live with the notes." },
 ];
 
 // Houses that aren't in the vertical slice yet: shown on the street, not interested for now.
@@ -72,14 +72,14 @@ const TRAIT_TEXT = {
 // Walt's tips: two lines, one per new system (L01 onboarding).
 const WALT = {
     day1: "Morning. First job's my yard, so I can watch. Tap it on the street, then Go mow.",
-    firstYard: "Lanes, back and forth. Then trim what the mower can't reach. Hit Finish job when you're done.",
+    firstYard: "Pick the stripes and the pace, then let it run. Careful costs time. Quick costs stars.",
     firstPaid: "That's how it works: good yard, they pay, the street talks. Next one's Mrs. Okafor.",
     knock: "Want more work? Knock on doors. It takes half an hour, but that's how you get new customers.",
     quote: "Price it fair. Too high, they say no. Too low, you're working for free.",
     breakdown: "That old mower coughs. Do maintenance at the end of the day, or save up for a better one at Rosa's.",
     hire: "You can't mow it all yourself. Rosa's has a job board. Post for help.",
     hired: "A worker needs their own mower. Rosa sells a good one. Then assign them jobs in the morning.",
-    plan: "Mow a yard clean once and your crew follows the way you did it.",
+    comp: "Every yard you do, you get a little better. Same goes for your crew. Give the new ones easy yards first.",
     dog: "That's Biscuit. He won't hurt you, but he won't move for you either. Text Kyle.",
     rep25: "The street is noticing. The Ditmores might talk to you now. They're picky.",
     weekend: "Week's done. Friday's payday. Workers get paid whether you had a good week or not.",

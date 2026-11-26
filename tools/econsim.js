@@ -34,8 +34,13 @@ const out = vm.runInContext(`(function(){
       if (mine && s.clock < 16 * 60) {
         var c = G.cust(mine.cust); G.goToJob(mine.id);
         var v = G.visitFor(mine.id);
-        G.tick(handMin[yardOf(c.yard).size] * (v.breakdownAt ? 1.1 : 1));
-        G.finishPlayerJob(mine.id, { mowCov: 0.96 + 0.04 * ${skill}, stripeQ: 0.25 + 0.3 * ${skill}, trimFrac: 0.8 + 0.2 * ${skill}, edgeFrac: 0.8 + 0.2 * ${skill}, blowFrac: 0.9, hits: v.hidden.length && Math.random() < 0.5 ? 1 : 0, found: v.hidden, mowerId: v.mowerId });
+        // automatic mowing at a steady pace: time and quality come from your competence
+        var k = v.comp / 100, C = N.comp, mins = 0; for (var t in v.minutes) mins += v.minutes[t];
+        G.tick(mins * (v.breakdownAt ? 1.15 : 1));
+        var miss = C.missAt0 * (1 - k), spot = C.spotAt0 + (C.spotAt100 - C.spotAt0) * k, hits = 0;
+        v.hidden.forEach(function(){ if (Math.random() > spot) hits++; });
+        var fr = function(){ return Math.random() < miss ? 0.8 : 0.99; };
+        G.finishPlayerJob(mine.id, { mowCov: C.covAt0 + (C.covAt100 - C.covAt0) * k, stripes: 20 * (C.stripeAt0 + (C.stripeAt100 - C.stripeAt0) * k), trimFrac: fr(), edgeFrac: fr(), blowFrac: 0.95, hits: hits, found: v.hidden, mowerId: v.mowerId });
       } else if (G.prospects().length && s.clock < 15 * 60) {
         var r = G.knock();
         if (r.cust) {
@@ -52,7 +57,7 @@ const out = vm.runInContext(`(function(){
     var log = s.dayLog;
     lines.push('W' + s.week + ' ' + G.dayName().slice(0,3) + ' $' + Math.round(s.money) + ' rep ' + s.rep + ' jobs ' + log.jobsDone.map(function(x){ return x.cust.split(' ').pop() + '(' + x.who[0] + x.stars + ')'; }).join(' ') + (log.missed.length ? ' MISSED ' + log.missed : '') + (log.wages.length ? ' wages ' + log.wages.map(function(w){return w.name + ' ' + w.hrs + 'h $' + w.pay;}).join(',') : ''));
     G.nextDay();
-    if (s.phase === 'weekend') { lines.push('  -- week ' + s.week + ': income ' + s.weekLog.income + ' tips ' + s.weekLog.tips + ' wages ' + s.weekLog.wages + ' spent ' + (s.weekLog.spent||0) + ' repairs ' + s.weekLog.repairs + ' gas ' + s.weekLog.gas + ' | workers ' + s.workers.map(function(w){return w.name + ' L' + w.level + ' ' + w.xp + 'xp';}).join(',')); G.nextWeek(); }
+    if (s.phase === 'weekend') { lines.push('  -- week ' + s.week + ': income ' + s.weekLog.income + ' tips ' + s.weekLog.tips + ' wages ' + s.weekLog.wages + ' spent ' + (s.weekLog.spent||0) + ' repairs ' + s.weekLog.repairs + ' gas ' + s.weekLog.gas + ' | you comp ' + Math.round(s.me.comp) + ' | workers ' + s.workers.map(function(w){return w.name + ' L' + w.level + ' ' + w.xp + 'xp comp ' + Math.round(w.comp);}).join(',')); G.nextWeek(); }
   }
   var cs = Object.keys(G.s.customers).map(function(k){ var c = G.s.customers[k]; return k + ':' + c.status + ' rel' + c.rel + (c.day !== null ? ' ' + N.days[c.day].slice(0,3) : '') + ' $' + c.price; });
   lines.push(cs.join(' | '));

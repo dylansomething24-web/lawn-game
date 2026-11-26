@@ -1,4 +1,5 @@
 // Every balance number in one place (L06 ground rule). Values from L02 and L05 unless noted.
+const lerp = (a, b, t) => a + (b - a) * t;
 const N = {
     startMoney: 200,
     startRep: 10,                         // Maple Street starts at 10 thanks to Walt's name
@@ -52,9 +53,33 @@ const N = {
     hireUnlockWeek: 2,
     workerMin: { small: 100, medium: 140, large: 190 },   // game minutes to mow, average worker
     workerTaskMin: { trim: 25, edge: 20, blow: 12 },
-    noPlanSlowdown: 1.15,
     knowledgeVisits: [0, 1, 3, 6],         // visits needed for levels 0..3
     knowledgeSpeed: [1, 0.9, 0.8, 0.7],
+    overgrownTime: 1.2,                   // tall grass takes longer
+
+    // competence (2026-11-26 redesign): nobody steers; the mower runs itself, and competence (0..100)
+    // decides how fast and how clean. It grows with every job, for you and for workers.
+    comp: {
+        youStart: 30,
+        fromStats: st => Math.round(10 + st.precision * 4 + st.care * 2),   // a new hire's starting competence
+        gain: 0.012,                       // each job closes this share of the gap to 100 (times yard size)
+        timeAt0: 1.2, timeAt100: 0.8,      // job time multiplier
+        covAt0: 0.955, covAt100: 0.998,    // how much of the lawn gets mowed before moving on
+        stripeAt0: 0.45, stripeAt100: 1,   // workers: share of the 20 stripe points
+        wobbleAt0: 5,                      // pixels of side-to-side wander in each lane (looks only)
+        shortAt0: 28,                      // pixels a lane can stop short of the edge (leaves strips for cleanup)
+        missAt0: 0.5,                      // chance a trim, edge or blow target is left partly undone
+        spotAt0: 0.3, spotAt100: 0.9,      // chance to spot a hidden sprinkler head before hitting it
+    },
+    // the pace you pick at each yard
+    pace: {
+        careful: { label: 'Careful', time: 1.2, cov: 0.012, stripe: 0.12,  wobble: 0.5, miss: 0.5, spot: 0.25 },
+        steady:  { label: 'Steady',  time: 1,   cov: 0,     stripe: 0,     wobble: 1,   miss: 1,   spot: 0 },
+        quick:   { label: 'Quick',   time: 0.8, cov: -0.02, stripe: -0.15, wobble: 1.6, miss: 1.6, spot: -0.15 },
+    },
+    touchUpMin: 12,                       // going back over what was missed (times the competence time multiplier)
+    kyleMin: 10,                          // waiting for Kyle to come get Biscuit
+    watchSpeeds: [1, 2, 4],               // how fast you watch your own yard
 
     // experience (L05 section 9)
     xpBase: 10, xpSize: { small: 1, medium: 1.5, large: 2 },

@@ -117,7 +117,7 @@ const Screens = {
             ${has ? '<button class="btn go" data-act="cont">Continue</button>' : ''}
             <button class="btn ${has ? 'alt' : 'go'}" data-act="newgame">New game</button>
             <button class="btn alt" data-act="loadcode">Load a save code</button></div>
-            <p class="sub" style="margin-top:18px">Phase 2 and 3 test build. Maple Street.</p></div>`);
+            <p class="sub" style="margin-top:18px">Test build: automatic mowing. Maple Street.</p></div>`);
         this.$('h-day').textContent = ''; this.$('h-clock').textContent = ''; this.$('h-money').textContent = '';
     },
     confirmNew(el) {
@@ -246,10 +246,10 @@ const Screens = {
             <span class="stars">${starStr(res.stars)}</span><div class="big">${res.score}</div>
             <table class="sum">
             ${line('Coverage', p.coverage, 40, Math.floor(r.mowCov * 1000) / 10 + '% mowed')}
-            ${line('Stripes', p.stripes, 20)}
+            ${line('Stripes', p.stripes, 20, r.wrongStripes ? `wanted ${r.pref === 'v' ? 'up-and-down' : 'side-to-side'}` : '')}
             ${line('Trim and edge', p.trimEdge, 20, te.length ? '' : 'not ordered')}
             ${line('Cleanup', p.cleanup, 10, visit.tasks.includes('blow') ? '' : 'not ordered')}
-            ${line('No damage', p.damage, 10, r.hits ? r.hits + ' sprinkler head' + (r.hits > 1 ? 's' : '') : '')}
+            ${line('No damage', p.damage, 10, r.hits ? r.hits + ' sprinkler head' + (r.hits > 1 ? 's' : '') : r.spotted ? 'spotted ' + r.spotted + ' sprinkler head' + (r.spotted > 1 ? 's' : '') : '')}
             ${res.pay ? `<tr><td>Paid</td><td class="pos">+$${res.pay}</td></tr>` : ''}
             ${res.tip ? `<tr><td>Tip</td><td class="pos">+$${res.tip}</td></tr>` : ''}
             ${res.repair ? `<tr><td>Sprinkler repair</td><td class="neg">-$${res.repair}</td></tr>` : ''}
@@ -257,7 +257,7 @@ const Screens = {
             </table>
             ${c.expect && c.start !== 'tutorial' && c.start !== 'odd' ? `<p class="small" style="margin-top:8px">${esc(c.name)} expects ${c.expect} stars.</p>` : ''}
             ${res.relMsg ? `<p style="margin-top:6px"><b>${esc(res.relMsg)}</b></p>` : ''}
-            ${res.planSaved ? `<p style="margin-top:6px">📋 ${res.planSaved === 'new' ? 'Plan saved: workers sent here will mow it your way.' : 'Better plan saved for this yard.'}</p>` : ''}
+            ${res.comp ? `<p class="small" style="margin-top:6px">Your competence: ${res.comp[0].toFixed(1)} → <b>${res.comp[1].toFixed(1)}</b></p>` : ''}
             <button class="btn go full" style="margin-top:12px" data-act="result">Back to the street</button></div>`, false);
     },
     leaveYard() {
@@ -407,7 +407,8 @@ const Screens = {
     crew() {
         const s = Game.s;
         const statRow = (st, show) => Object.keys(st).map(k => `<span class="stat">${k} <b>${show && !show.includes(k) ? '?' : st[k]}</b></span>`).join('');
-        const workers = s.workers.map(w => `<div class="card"><div class="row"><div class="grow"><span class="name">${esc(w.name)}</span> <span class="small">${w.age} · ${Game.rank(w.level)} L${w.level} · ${w.xp} xp · $${w.wage}/h</span></div></div>
+        const compBar = v => `<div class="row" style="margin:4px 0"><span class="small" style="width:100px">Competence <b>${Math.floor(v)}</b></span><div class="bar grow" style="margin:0"><i style="width:${v}%"></i></div></div>`;
+        const workers = s.workers.map(w => `<div class="card"><div class="row"><div class="grow"><span class="name">${esc(w.name)}</span> <span class="small">${w.age} · ${Game.rank(w.level)} L${w.level} · ${w.xp} xp · $${w.wage}/h</span></div></div>${compBar(Game.comp(w.id))}
             <div>${statRow(w.stats)}</div><div>${w.traits.map(t => `<span class="trait" title="${esc(TRAIT_TEXT[t] || '')}">${esc(t)}</span>`).join('')}</div>
             <div class="small">${w.traits.map(t => esc(TRAIT_TEXT[t] || '')).join(' ')}</div></div>`).join('');
         let hiring = '';
@@ -422,7 +423,7 @@ const Screens = {
                 <div><span class="trait">${esc(a.traits[0])}</span><span class="trait">?</span> <span class="small">${esc(TRAIT_TEXT[a.traits[0]] || '')}</span></div></div>`;
         }).join('');
         const mowers = Game.mowers().length;
-        this.sheet(this.head('Crew') + `<div class="card"><b>You</b><div class="small">Owner. Mows, trims, and answers the phone.</div></div>${workers}
+        this.sheet(this.head('Crew') + `<div class="card"><b>You</b><div class="small">Owner. Runs the jobs and answers the phone.</div>${compBar(Game.comp('you'))}<div class="small">Competence makes jobs faster and cleaner. It grows with every job.</div></div>${workers}
             <h2>Hiring</h2>${hiring}
             <div class="small" style="margin-top:4px">Each worker needs a mower to work. You have ${mowers}. Workers are paid by the hour for the time they work (at least ${N.minPaidHours} hours), every Friday.</div>`);
     },

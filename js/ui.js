@@ -17,7 +17,7 @@ const Pacing = {
 
 // The yard view's controls. The street and menus live in screens.js.
 const UI = {
-    scene: null, shown: {}, hintTimer: null, lastCov: -1, zoomed: true, auto: true, held: null,
+    scene: null, shown: {}, hintTimer: null, lastCov: -1, zoomed: false, held: null,
 
     $(id) { return document.getElementById(id); },
 
@@ -28,7 +28,7 @@ const UI = {
         box.classList.toggle('many', list.length > 4);
         for (const a of list) {
             const b = document.createElement('button');
-            b.className = 'abtn' + (a.label === 'Stop' ? ' stop' : '') + (a.hold ? ' hold' : '');
+            b.className = 'abtn' + (a.label === 'Stop' ? ' stop' : '') + (a.hold ? ' hold' : '') + (a.go ? ' go' : '');
             b.textContent = a.label;
             b.disabled = !!a.off;
             if (a.hold) {   // hold-to-drive: works only while the finger is down
@@ -54,17 +54,14 @@ const UI = {
         const fin = this.$('btn-finish');
         fin.onclick = () => {
             const sc = this.scene; if (!sc || sc.finished) return;
-            const ready = sc.yard.mowCoverage() >= CFG.finishAt && sc.tasksDone();
-            if (!ready && !fin.dataset.armed) {
+            if (sc.stage !== 'review' && !fin.dataset.armed) {
                 fin.dataset.armed = '1'; fin.classList.add('armed'); fin.textContent = 'Not done. Sure?';
-                setTimeout(() => { delete fin.dataset.armed; fin.classList.remove('armed'); fin.textContent = 'Finish job'; }, 2500);
+                setTimeout(() => { delete fin.dataset.armed; fin.classList.remove('armed'); fin.textContent = 'Finish now'; }, 2500);
                 return;
             }
-            delete fin.dataset.armed; fin.classList.remove('armed'); fin.textContent = 'Finish job';
+            delete fin.dataset.armed; fin.classList.remove('armed'); fin.textContent = 'Finish now';
             sc.finish();
         };
-        const md = this.$('btn-mode');
-        md.onclick = () => { this.auto = !this.auto; this.showMode(); if (this.scene) this.scene.modeChanged(); };
         window.addEventListener('pointerup', () => this.releaseHold());
         window.addEventListener('blur', () => this.releaseHold());
         document.addEventListener('visibilitychange', () => this.releaseHold());
@@ -72,26 +69,15 @@ const UI = {
         Debug.init();
     },
 
-    showMode() { const md = this.$('btn-mode'); md.textContent = this.auto ? 'Auto' : 'Manual'; md.classList.toggle('auto', this.auto); },
-
     sceneReady(scene) {
-        this.scene = scene; this.showMode(); this.lastCov = -1;
+        this.scene = scene; this.lastCov = -1; this.lastOrder = '';
         this.$('btn-zoom').textContent = this.zoomed ? 'Whole yard' : 'Zoom in';
         this.$('y-name').textContent = scene.visit.cust.name;
-        const row = this.$('toolrow'); row.innerHTML = '';
-        for (const k of scene.toolList) {
-            const b = document.createElement('button');
-            b.className = 'tbtn'; b.id = 'tool-' + k; b.textContent = TOOL_LABEL[k];
-            b.onclick = () => { Sound.init(); scene.setTool(k); };
-            row.appendChild(b);
-        }
-        this.toolChanged('mower');
         this.extra(null);
     },
 
-    toolChanged(kind) {
-        for (const b of this.$('toolrow').children) b.classList.toggle('on', b.id === 'tool-' + kind);
-    },
+    // what's happening right now, in words
+    status(text) { const el = this.$('y-status'); if (el.textContent !== text) el.textContent = text; },
 
     hud(cov) {
         const pct = Math.floor(cov * 1000) / 10;
@@ -156,7 +142,7 @@ const Debug = {
         if (!this.on) return;
         this.el = document.getElementById('debug'); this.el.hidden = false;
         const $ = id => document.getElementById(id);
-        $('dbg-finish').onclick = () => { if (UI.scene && Screens.cur === 'yard') { UI.scene.debugFinish(); } };
+        $('dbg-finish').onclick = () => { if (UI.scene && Screens.cur === 'yard' && !UI.scene.finished) UI.scene.debugFinish(); };
         $('dbg-money').onclick = () => { Game.s.money += 500; Game.changed(); };
         $('dbg-rep').onclick = () => { Game.addRep(10); Game.changed(); };
         $('dbg-five').onclick = () => { if (Game.s.phase === 'day' && Game.s.clock < 17 * 60) Game.tick(17 * 60 - Game.s.clock); };

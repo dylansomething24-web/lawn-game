@@ -3,6 +3,7 @@
 const SAVE_KEY = 'cutabove_save_v1';
 const rnd = (a, b) => a + Math.random() * (b - a);
 const clamp01 = v => Math.max(0, Math.min(1, v));
+const TASK_TOOLS = { trim: 'trimmer', edge: 'edger', blow: 'blower' };
 const mark = name => { if (typeof Pacing !== 'undefined') Pacing.mark(name); };
 
 const Game = {
@@ -25,7 +26,7 @@ const Game = {
             customers, jobs: [], carry: [], workers: [], applicants: null, hireUnlocked: false,
             gear: [{ id: 'm1', type: 'push', cond: N.startCondition, broken: false }],
             tools: { trimmer: true, edger: false, blower: false },
-            found: {}, know: { you: {} },
+            found: {}, know: { you: {} }, me: { comp: N.comp.youStart },
             phone: [], msgId: 1, jobId: 1, workerId: 1,
             day0: null, week0: null, tipsShown: {}, knocks: 0, wageOwed: 0, totalJobs: 0,
         };
@@ -34,15 +35,21 @@ const Game = {
     },
     save() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(this.s)); } catch (e) { } },
     load() {
-        try { const t = localStorage.getItem(SAVE_KEY); if (t) { this.s = JSON.parse(t); return true; } } catch (e) { }
+        try { const t = localStorage.getItem(SAVE_KEY); if (t) { this.s = JSON.parse(t); this.migrate(); return true; } } catch (e) { }
         return false;
+    },
+    // older saves: add competence
+    migrate() {
+        const s = this.s;
+        if (!s.me) s.me = { comp: N.comp.youStart };
+        for (const w of s.workers) if (w.comp == null) w.comp = N.comp.fromStats(w.stats);
     },
     hasSave() { try { return !!localStorage.getItem(SAVE_KEY); } catch (e) { return false; } },
     exportCode() { return btoa(unescape(encodeURIComponent(JSON.stringify(this.s)))); },
     importCode(code) {
         const s = JSON.parse(decodeURIComponent(escape(atob(code.trim()))));
         if (!s || !s.customers || !s.week) throw new Error('not a save code');
-        this.s = s; this.save(); return true;
+        this.s = s; this.migrate(); this.save(); return true;
     },
 
     // ---------- lookups ----------
@@ -63,6 +70,29 @@ const Game = {
         let l = 0; N.knowledgeVisits.forEach((need, i) => { if (v >= need) l = i; });
         return l;
     },
+    // ---------- competence ----------
+    comp(person) {
+        if (person === 'you') return this.s.me.comp;
+        const w = this.worker(person); if (!w) return N.comp.youStart;
+        if (w.comp == null) w.comp = N.comp.fromStats(w.stats);
+        return w.comp;
+    },
+    // Every job teaches something; a bad one teaches less. Returns [before, after].
+    grow(person, size, stars) {
+        const w = person === 'you' ? null : this.worker(person), o = w || this.s.me, before = this.comp(person);
+        const k = N.comp.gain * N.xpSize[size] * (stars >= 3 ? 1 : 0.5) * (w && w.traits.includes('Eager') ? 1.25 : 1);
+        o.comp = Math.round((before + (100 - before) * k) * 10) / 10;
+        return [before, o.comp];
+    },
+    // Game minutes for each part of a job, before pace and stripe direction.
+    jobMinutes(person, custId, tasks, mowerType) {
+        const c = this.cust(custId), y = yardOf(c.yard), k = this.comp(person) / 100;
+        const f = lerp(N.comp.timeAt0, N.comp.timeAt100, k) * N.knowledgeSpeed[this.knowLevel(person, c.yard)] * (c.overgrown ? N.overgrownTime : 1);
+        const out = { mow: N.workerMin[y.size] * f * (mowerType ? Math.sqrt(N.gear.push.speed / N.gear[mowerType].speed) : 1) };
+        for (const t of tasks) if (t !== 'mow' && this.s.tools[TASK_TOOLS[t]]) out[t] = N.workerTaskMin[t] * f;
+        return out;
+    },
+
     clockText(m) {
         m = Math.round(m); const h = Math.floor(m / 60), mm = m % 60, h12 = ((h + 11) % 12) + 1;
         return `${h12}:${String(mm).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
@@ -212,12 +242,9 @@ const Game = {
     },
 
     planWorkerJob(w, j) {
-        const c = this.cust(j.cust), y = yardOf(c.yard), st = this.cs(j.cust);
-        let need = N.workerMin[y.size];
-        for (const t of j.tasks) if (t !== 'mow' && (t === 'trim' || this.s.tools[t === 'edge' ? 'edger' : 'blower'])) need += N.workerTaskMin[t] || 0;
+        const c = this.cust(j.cust), M = this.jobMinutes(w.id, j.cust, j.tasks, null);
+        let need = Object.values(M).reduce((a, b) => a + b, 0);
         need *= 1.25 - w.stats.speed * 0.05;
-        need *= N.knowledgeSpeed[this.knowLevel(w.id, c.yard)];
-        if (!st.plan) need *= N.noPlanSlowdown;
         if (w.traits.includes('Perfectionist')) need *= 1.2;
         if (w.traits.includes('Chatty') && c.archetype === 'Nice Lady') need += 20;
         j.need = Math.round(need); j.extra = 0;
@@ -272,26 +299,26 @@ const Game = {
     },
 
     finishWorkerJob(w, j) {
-        const c = this.cust(j.cust), st = this.cs(j.cust), y = yardOf(c.yard), P = w.stats;
-        const know = this.knowLevel(w.id, c.yard);
-        const cov = Math.min(1, 0.93 + 0.008 * P.precision + (st.plan ? 0.03 : 0) + 0.005 * know + rnd(-0.02, 0.02));
-        let stripes = st.plan ? st.plan.stripes * (0.82 + 0.03 * P.precision) : 6 + 1.4 * P.precision;
+        const c = this.cust(j.cust), y = yardOf(c.yard), P = w.stats, C = N.comp;
+        const know = this.knowLevel(w.id, c.yard), k = this.comp(w.id) / 100;
+        const cov = Math.min(1, lerp(C.covAt0, C.covAt100, k) + 0.003 * know + rnd(-0.012, 0.012));
+        let stripes = 20 * clamp01(lerp(C.stripeAt0, C.stripeAt100, k) + rnd(-0.05, 0.05));
         if (w.traits.includes('Perfectionist')) stripes += 3;
         if (j.rough) stripes -= 4;
         stripes = Math.max(0, Math.min(20, stripes));
+        const miss = lerp(C.missAt0, 0, k);
         const frac = { trim: null, edge: null, blow: null };
         for (const t of ['trim', 'edge', 'blow']) {
             if (!j.tasks.includes(t)) continue;
-            const owned = t === 'trim' ? this.s.tools.trimmer : t === 'edge' ? this.s.tools.edger : this.s.tools.blower;
-            if (!owned) { frac[t] = 0; continue; }
+            if (!this.s.tools[TASK_TOOLS[t]]) { frac[t] = 0; continue; }
             if (t !== 'blow' && w.traits.includes('Corner Cutter') && Math.random() < 0.4) { frac[t] = 0.3; continue; }
-            frac[t] = clamp01(0.75 + 0.035 * P.precision + rnd(-0.05, 0.05));
+            frac[t] = Math.random() < miss ? rnd(0.75, 0.92) : rnd(0.97, 1);
         }
         let hits = 0;
         const found = this.s.found[c.yard] || [];
         for (const h of y.hidden) {
             if (found.some(f => f.x === h.x && f.y === h.y)) continue;
-            let p = 0.45 - 0.05 * P.care; if (w.traits.includes('Rookie Nerves') && know === 0) p += 0.15;
+            let p = 1 - lerp(C.spotAt0, C.spotAt100, k) - 0.03 * P.care; if (w.traits.includes('Rookie Nerves') && know === 0) p += 0.15;
             if (Math.random() < p) { hits++; }
             found.push({ x: h.x, y: h.y });   // found either way: hit it or spotted it
         }
@@ -302,6 +329,7 @@ const Game = {
         const xp = Math.round(N.xpBase * N.xpSize[y.size] * res.stars / 3 * (w.traits.includes('Eager') ? 1.1 : 1));
         w.xp += xp; const lv = this.levelFor(w.xp);
         if (lv > w.level) { w.level = lv; this.msg(w.name, `Hit level ${lv}! (${this.rank(lv)})`); }
+        this.grow(w.id, y.size, res.stars);
         const m = this.s.gear.find(g => g.id === this.s.mowerFor[w.id]); if (m) m.cond = Math.max(0, m.cond - N.gear[m.type].wear);
     },
 
@@ -318,7 +346,6 @@ const Game = {
             cov,
         };
     },
-    stripePts(q) { return 20 * clamp01((q - 0.2) / 0.3); },
 
     // Common end of any job: score, stars, pay, relationship, reputation, knowledge.
     completeJob(j, parts, person, hits) {
@@ -391,7 +418,8 @@ const Game = {
             mowerSpeed: mower ? N.gear[mower.type].speed : 80, mowerId: mower && mower.id,
             breakdownAt: breakdown, dogOut: !!c.dog && Math.random() < N.dogOutChance,
             tutorial: c.start === 'tutorial', overgrown: !!c.overgrown,
-            hasPlan: !!this.cs(c.id).plan,
+            comp: this.comp('you'),
+            minutes: this.jobMinutes('you', c.id, j.tasks, mower ? mower.type : null),
         };
     },
 
@@ -403,22 +431,16 @@ const Game = {
         return true;
     },
 
-    // r: { mowCov, stripeQ, trimFrac, edgeFrac, blowFrac, hits, found:[{x,y}] }
+    // r: { mowCov, stripes (0..20), wrongStripes, trimFrac, edgeFrac, blowFrac, hits, found:[{x,y}], mowerId }
     finishPlayerJob(jobId, r) {
-        const j = this.job(jobId), c = this.cust(j.cust), st = this.cs(j.cust);
+        const j = this.job(jobId), c = this.cust(j.cust), y = yardOf(c.yard);
         const f = this.s.found[c.yard] = this.s.found[c.yard] || [];
         for (const h of r.found || []) if (!f.some(x => x.x === h.x && x.y === h.y)) f.push(h);
         const frac = { trim: j.tasks.includes('trim') ? r.trimFrac : null, edge: j.tasks.includes('edge') ? r.edgeFrac : null, blow: j.tasks.includes('blow') ? r.blowFrac : null };
-        const stripes = this.stripePts(r.stripeQ);
+        const stripes = r.stripes * (r.wrongStripes ? 0.5 : 1);
         const parts = this.scoreParts(r.mowCov, stripes, frac, r.hits);
         const res = this.completeJob(j, parts, 'you', r.hits);
-        // your way of mowing becomes the yard's plan if it's at least as good
-        if (r.mowCov >= 0.95 && (!st.plan || stripes + parts.coverage >= st.plan.stripes + st.plan.coverage)) {
-            const first = !st.plan;
-            st.plan = { stripes: Math.round(stripes), coverage: parts.coverage };
-            res.planSaved = first ? 'new' : 'better';
-            if (this.s.workers.length) this.walt('plan');
-        }
+        res.comp = this.grow('you', y.size, res.stars);
         const m = this.s.gear.find(g => g.id === r.mowerId); if (m) m.cond = Math.max(0, m.cond - N.gear[m.type].wear);
         mark('first yard mowed');
         if (c.start === 'tutorial') this.walt('firstPaid');
@@ -496,7 +518,7 @@ const Game = {
         const s = this.s, a = APPLICANTS.find(x => x.name === name);
         if (!a || !this.canHire()) return;
         s.workers.push({ id: 'w' + s.workerId++, name: a.name, age: a.age, stats: Object.assign({}, a.stats), traits: a.traits.slice(), wage: a.wage,
-            xp: 0, level: 1, morale: 70, clutch: 0, start: null, end: null, hired: `${s.week}-${s.day}` });
+            xp: 0, level: 1, comp: N.comp.fromStats(a.stats), morale: 70, clutch: 0, start: null, end: null, hired: `${s.week}-${s.day}` });
         s.know[s.workers[s.workers.length - 1].id] = {};
         s.applicants.list = s.applicants.list.filter(n => n !== name);
         if (!s.applicants.list.length || !this.canHire()) s.applicants = null;

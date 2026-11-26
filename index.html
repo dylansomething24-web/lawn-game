@@ -53,16 +53,16 @@ button:disabled{cursor:default;}
 
 #tools{flex:none;display:grid;grid-template-columns:repeat(var(--tools,2),1fr);gap:6px;padding:8px 10px 6px;background:var(--panel);border-top:3px solid var(--ink);}
 #tools .row2{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fit,minmax(0,1fr));gap:8px;min-height:56px;}
-#tools .row3{grid-column:1/-1;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;}
-#toolrow{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fit,minmax(0,1fr));gap:6px;}
+#tools .row3{grid-column:1/-1;display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+#y-status{grid-column:1/-1;text-align:center;font-weight:700;font-size:.9rem;min-height:1.2em;color:var(--muted);}
 #actions.many .abtn{font-size:.85rem;padding:0 2px;}
 .abtn{min-height:56px;border:3px solid var(--ink);border-radius:12px;background:#fff3c4;font-weight:700;font-size:1.05rem;box-shadow:0 3px 0 var(--ink);}
 .abtn:active{transform:translateY(2px);box-shadow:0 1px 0 var(--ink);}
 .abtn:disabled{opacity:.35;box-shadow:none;}
 .abtn.stop{background:#ffd0c8;}
+.abtn.go{background:var(--light);}
 .abtn.hold{font-size:1.7rem;touch-action:none;-webkit-touch-callout:none;}
 .abtn.held{background:var(--light);transform:translateY(2px);box-shadow:0 1px 0 var(--ink);}
-#btn-mode.auto{background:var(--light);}
 .tbtn{min-height:44px;border:3px solid var(--ink);border-radius:12px;background:var(--btn);font-weight:700;font-size:.95rem;box-shadow:0 3px 0 var(--ink);}
 .tbtn:active{transform:translateY(2px);box-shadow:0 1px 0 var(--ink);}
 .tbtn.on{background:var(--light);}
@@ -166,12 +166,11 @@ textarea{width:100%;min-height:90px;font:12px monospace;border:2px solid var(--i
             <div id="y-extra"></div>
         </div>
         <div id="tools">
-            <div id="toolrow"></div>
+            <div id="y-status"></div>
             <div class="row2" id="actions"></div>
             <div class="row3">
-                <button class="sbtn auto" id="btn-mode">Auto</button>
-                <button class="sbtn" id="btn-zoom">Whole yard</button>
-                <button class="sbtn" id="btn-finish">Finish job</button>
+                <button class="sbtn" id="btn-zoom">Zoom in</button>
+                <button class="sbtn" id="btn-finish">Finish now</button>
                 <button class="sbtn" id="btn-sound">Sound on</button>
             </div>
         </div>
@@ -193,6 +192,7 @@ textarea{width:100%;min-height:90px;font:12px monospace;border:2px solid var(--i
 <script src="js/ui.js"></script>
 <script src="js/game.js"></script>
 <script src="js/trim.js"></script>
+<script src="js/auto.js"></script>
 <script src="js/scene.js"></script>
 <script src="js/screens.js"></script>
 <script>
