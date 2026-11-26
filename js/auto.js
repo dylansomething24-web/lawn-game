@@ -9,23 +9,50 @@ function planLanes(yard, orient) {
     const b0 = (v ? B.y0 : B.x0) + r, b1 = (v ? B.y1 : B.x1) - r;   // along a lane
     const n = Math.max(2, Math.ceil((a1 - a0) / m.lane) + 1), gap = (a1 - a0) / (n - 1);
     const segs = [];
+    let passes = 0;   // turns at the ends: counted before splitting at concrete, so crossing the walk isn't a "turn"
+    // A lane that would ride along a walk or driveway slides sideways (less than half a lane) onto the grass beside it.
+    const onConcrete = a => {
+        let c = 0;
+        for (let b = b0; b <= b1 + 0.01; b += 4) { const x = v ? a : b, y = v ? b : a; if (yard.isHard(x, y) && !yard.collides(x, y, r, true)) c++; }
+        return c;
+    };
+    const maxShift = Math.min(10, gap * 0.45);
     for (let k = 0; k < n; k++) {
-        const a = a0 + gap * k, runs = [];
-        let start = null, last = null;
+        let a = a0 + gap * k, bestC = onConcrete(a);
+        for (let d = 1; d <= maxShift && bestC > 0; d += 1) for (const t of [a0 + gap * k - d, a0 + gap * k + d]) {
+            if (t < a0 || t > a1) continue;
+            const c = onConcrete(t);
+            if (c < bestC - 2) { bestC = c; a = t; }
+        }
+        const runs = [];
+        let start = null, last = null, open = false;
         for (let b = b0; b <= b1 + 0.01; b += 2) {
             const x = v ? a : b, y = v ? b : a;
-            if (!yard.collides(x, y, r, true)) { if (start === null) start = b; last = b; }
+            const free = !yard.collides(x, y, r, true);
+            if (free && !open) { open = true; passes++; }
+            if (!free) open = false;
+            // only cut where the blade is over some grass; over the driveway or walk it lifts and just drives
+            if (free && lawnUnder(yard, x, y)) { if (start === null) start = b; last = b; }
             else if (start !== null) { runs.push([start, last]); start = null; }
         }
         if (start !== null) runs.push([start, last]);
         const fwd = k % 2 === 0;   // even lanes one way, odd lanes back the other way
         const p = t => v ? { x: a, y: t } : { x: t, y: a };
+        if (!fwd) runs.reverse();
         for (const [s, e] of runs) {
             if (e - s < 4) continue;
             segs.push({ lane: k, from: p(fwd ? s : e), to: p(fwd ? e : s), len: e - s });
         }
     }
-    return { segs, lanes: n, passes: segs.length, a0, gap, orient };
+    return { segs, lanes: n, passes, a0, gap, orient };
+}
+
+// Is any grass under the blade at (x, y)? Checks the center and a small ring around it.
+function lawnUnder(yard, x, y) {
+    if (yard.isLawn(x, y)) return true;
+    const R = 5;   // the center can hang a little over the edge, not ride along the concrete
+    for (let i = 0; i < 12; i++) if (yard.isLawn(x + Math.cos(i * 0.5236) * R, y + Math.sin(i * 0.5236) * R)) return true;
+    return false;
 }
 
 // Which shade a pass leaves, from the way it's heading (same rule as before: CFG.stripe).
